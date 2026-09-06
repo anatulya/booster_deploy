@@ -22,11 +22,16 @@ class MujocoController(BaseController):
         self.mj_data = mujoco.MjData(self.mj_model)
         mujoco.mj_resetData(self.mj_model, self.mj_data)
 
+        init_dof_pos = (
+            np.array(self.cfg.mujoco.init_dof_pos, dtype=np.float32)
+            if self.cfg.mujoco.init_dof_pos is not None
+            else self.robot.default_joint_pos.numpy()
+        )
         self.mj_data.qpos = np.concatenate(
             [
                 np.array(self.cfg.mujoco.init_pos, dtype=np.float32),
                 np.array(self.cfg.mujoco.init_quat, dtype=np.float32),
-                self.robot.default_joint_pos.numpy(),
+                init_dof_pos,
             ]
         )
         mujoco.mj_forward(self.mj_model, self.mj_data)
@@ -222,7 +227,103 @@ class MujocoController(BaseController):
             dof_pos = self.mj_data.qpos.astype(np.float32)[7:]
             dof_vel = self.mj_data.qvel.astype(np.float32)[6:]
 
-    def run(self):
+    def _composite_ghost_geoms(self, renderer, ghost_scene, cam) -> None:
+        """Copy the ghost robot's geoms into `renderer`'s scene as an overlay.
+
+        `mujoco.Renderer` only holds a single `MjvScene`, unlike the
+        interactive viewer which merges the main scene with a separate
+        `user_scn`. So here we compute the ghost's geoms into a scratch
+        scene, then manually copy the geom structs onto the tail of the
+        renderer's scene and bump `ngeom` to include them.
+        """
+        n_main = renderer._scene.ngeom
+        mujoco.mjv_updateScene(
+            self.mj_model,
+            self._ghost_mj_data,
+            self._ghost_scene_option,
+            None,
+            cam,
+            int(mujoco.mjtCatBit.mjCAT_DYNAMIC),
+            ghost_scene,
+        )
+        n_ghost = ghost_scene.ngeom
+        scalar_fields = (
+            "type", "dataid", "objtype", "objid", "category", "texid",
+            "texuniform", "matid", "emission", "specular", "shininess",
+            "reflectance", "transparent", "camdist", "modelrbound", "label",
+        )
+        array_fields = ("size", "pos", "mat", "rgba")
+        for i in range(n_ghost):
+            src = ghost_scene.geoms[i]
+            dst = renderer._scene.geoms[n_main + i]
+            for f in scalar_fields:
+                setattr(dst, f, getattr(src, f))
+            for f in array_fields:
+                getattr(dst, f)[:] = getattr(src, f)
+            dst.rgba[:] = self._ghost_rgba
+        renderer._scene.ngeom = n_main + n_ghost
+
+    def _run_offscreen(self, record_path: str):
+        """Headless run: render offscreen (via EGL) and encode straight to an mp4.
+
+        Used when there's no display for the interactive `mujoco.viewer`.
+        """
+        import subprocess
+
+        width = min(self.cfg.mujoco.record_video_width, self.mj_model.vis.global_.offwidth)
+        height = min(self.cfg.mujoco.record_video_height, self.mj_model.vis.global_.offheight)
+        fps = self.cfg.mujoco.record_video_fps or round(1.0 / self.cfg.policy_dt)
+
+        renderer = mujoco.Renderer(self.mj_model, height=height, width=width)
+        cam = mujoco.MjvCamera()
+        cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        mujoco.mjv_defaultFreeCamera(self.mj_model, cam)
+        cam.distance = 3.0
+        cam.elevation = -20
+
+        ghost_scene = None
+        if self.cfg.mujoco.visualize_reference_ghost:
+            ghost_scene = mujoco.MjvScene(self.mj_model, maxgeom=1000)
+
+        n_steps = max(1, round(self.cfg.mujoco.record_video_seconds * fps))
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "rawvideo", "-vcodec", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
+            "-an", "-vcodec", "libx264", "-pix_fmt", "yuv420p",
+            record_path,
+        ]
+        proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+        if self.vel_command is not None:
+            print("\nSet command (x, y, yaw): ", end="")
+        self.update_state()
+        self.start()
+
+        try:
+            for _ in range(n_steps):
+                if not self.is_running:
+                    break
+                self.update_state()
+                dof_targets = self.policy_step()
+                self.ctrl_step(dof_targets)
+
+                cam.lookat[:] = self.mj_data.qpos.astype(np.float32)[0:3]
+                renderer.update_scene(self.mj_data, camera=cam)
+                if ghost_scene is not None:
+                    self._composite_ghost_geoms(renderer, ghost_scene, cam)
+
+                frame = renderer.render()
+                proc.stdin.write(frame.tobytes())
+        finally:
+            proc.stdin.close()
+            proc.wait()
+            renderer.close()
+
+        print(f"Saved recording to {record_path}")
+
+    def _run_interactive(self):
         with mujoco.viewer.launch_passive(
                 self.mj_model, self.mj_data) as viewer:
 
@@ -247,3 +348,9 @@ class MujocoController(BaseController):
 
                 self.viewer.cam.lookat[:] = self.mj_data.qpos.astype(np.float32)[0:3]
                 self.viewer.sync()
+
+    def run(self):
+        if self.cfg.mujoco.record_video_path:
+            self._run_offscreen(self.cfg.mujoco.record_video_path)
+        else:
+            self._run_interactive()

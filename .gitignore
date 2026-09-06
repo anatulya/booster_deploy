@@ -2,6 +2,10 @@
 tasks/*/models/
 tasks/*/motions/
 
+# Separate repo (BoosterRobotics/booster_assets), cloned+pip-installed
+# independently per README -- not part of this repo's history.
+booster_assets/
+
 .DS_Store
 
 # Common Python temporary files

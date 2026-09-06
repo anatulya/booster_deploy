@@ -16,6 +16,12 @@ parser.add_argument("--mujoco", action="store_true", default=False,
                     help="deploy in mujoco simulation")
 parser.add_argument("--webots", action="store_true", default=False,
                     help="deploy in webots simulation")
+parser.add_argument("--record", type=str, default=None,
+                    help="mujoco only: skip the interactive viewer (which needs a "
+                         "display) and instead render offscreen to this .mp4 path. "
+                         "Use this when running headless.")
+parser.add_argument("--record-seconds", type=float, default=15.0,
+                    help="mujoco --record only: length of the recorded clip in seconds.")
 parser.add_argument(
     "--device", type=str, default="cpu",
     help="Device to run the evaluation on (e.g., 'cpu', 'cuda')")
@@ -55,8 +61,20 @@ def main():
 
     # decide how to run based on flags
     if args.mujoco:
+        if args.record:
+            # Offscreen (EGL) rendering doesn't need an X display, but MuJoCo
+            # picks its GL backend from this env var the first time any of its
+            # rendering submodules is imported, so it must be set before that
+            # happens.
+            import os as _os
+            _os.environ.setdefault("MUJOCO_GL", "egl")
+
         # run mujoco controller
         from booster_deploy.controllers.mujoco_controller import MujocoController
+
+        if args.record:
+            task_cfg.mujoco.record_video_path = args.record
+            task_cfg.mujoco.record_video_seconds = args.record_seconds
 
         MujocoController(task_cfg).run()
     else:

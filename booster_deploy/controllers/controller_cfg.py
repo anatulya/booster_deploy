@@ -16,12 +16,26 @@ class PrepareStateCfg:
 class MujocoControllerCfg:
     init_pos: List[float] = [0.0, 0.0, 0.6]
     init_quat: List[float] = [1.0, 0.0, 0.0, 0.0]
+    # Initial joint angles for MuJoCo's spawn qpos. Defaults to
+    # `robot.default_joint_pos` (None); set this instead when a policy's
+    # obs/action baseline pose differs from the standing pose it should
+    # actually be deployed from.
+    init_dof_pos: Optional[List[float]] = None
     decimation: int = 10
     # physics_dt will automatically be set by ControllerCfg
     physics_dt: float = None  # type: ignore
     log_states: Optional[str] = None
     visualize_reference_ghost: bool = False
     ghost_rgba: List[float] = [0.2, 0.8, 0.2, 0.25]
+
+    # Offscreen video recording (used when no display is available).
+    record_video_path: Optional[str] = None
+    record_video_seconds: float = 15.0
+    record_video_fps: Optional[int] = None
+    # Must not exceed the MJCF's <visual><global offwidth/offheight> (defaults
+    # to 640x480 if the XML doesn't set one).
+    record_video_width: int = 640
+    record_video_height: int = 480
 
 
 @configclass
