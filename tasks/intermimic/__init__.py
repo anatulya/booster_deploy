@@ -7,9 +7,9 @@ from .intermimic import K1InterMimicControllerCfg
 class K1InterMimicSmallboxCfg(K1InterMimicControllerCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.policy.checkpoint_path = "models/k1_toreal_actor_ts.pt"
+        self.policy.checkpoint_path = "models/k1_smallbox_toreal_newphys_ep2000.pt"
         self.policy.motion_path = (
-            "motions/sub4_smallbox_047_smallbox_intermimic_original.pt"
+            "motions/k1_stand_hold_smallbox047_last_intermimic_original.pt"
         )
 
 

@@ -92,11 +92,26 @@ class InterMimicPolicy(Policy):
         joint_pos = self.robot.data.joint_pos - self.default_joint_pos
         joint_vel = self.robot.data.joint_vel
 
+        projected_gravity = self._add_noise(
+            projected_gravity, self.cfg.noise_projected_gravity)
+        base_ang_vel = self._add_noise(
+            base_ang_vel, self.cfg.noise_base_ang_vel)
+        joint_pos = self._add_noise(joint_pos, self.cfg.noise_joint_pos)
+        joint_vel = self._add_noise(joint_vel, self.cfg.noise_joint_vel)
+
         return torch.cat(
             [projected_gravity, base_ang_vel, joint_pos, joint_vel,
              self.last_action],
             dim=0,
         )
+
+    def _add_noise(self, x: torch.Tensor, scale: float) -> torch.Tensor:
+        """Additive uniform noise on ±scale, matching the spec's training
+        noise (only applied to sensor-like terms -- not last_action or the
+        reference command, which aren't sensor readings)."""
+        if scale == 0.0:
+            return x
+        return x + (torch.rand_like(x) * 2.0 - 1.0) * scale
 
     def _compute_future_command_block(self) -> torch.Tensor:
         """500-dim: `num_future_frames` lookahead frames x (ref joint
@@ -188,6 +203,13 @@ class InterMimicPolicyCfg(PolicyCfg):
     num_future_frames: int = 10
     future_frame_stride: int = 5
 
+    # Additive uniform observation noise on ±scale, matching the spec's
+    # training noise table. Off (0.0) by default; a task opts in.
+    noise_projected_gravity: float = 0.0
+    noise_base_ang_vel: float = 0.0
+    noise_joint_pos: float = 0.0
+    noise_joint_vel: float = 0.0
+
 
 @configclass
 class K1InterMimicControllerCfg(ControllerCfg):
@@ -221,4 +243,19 @@ class K1InterMimicControllerCfg(ControllerCfg):
     policy: InterMimicPolicyCfg = InterMimicPolicyCfg()
     mujoco = MujocoControllerCfg(
         visualize_reference_ghost=True,
+        # `robot.default_joint_pos` must stay all-zero (this checkpoint's
+        # obs/action baseline), but joint-zero on this robot *is* the
+        # T-pose (arms out) -- shoulder_roll=0 is horizontal; every other
+        # K1 task explicitly sets it to +-1.3 to bring the arms down.
+        # So spawn MuJoCo at the real robot's actual standing pose
+        # (booster.py's prepare_state.joint_pos: arms down, slightly bent
+        # knees/ankles) instead, matching what other tasks look like and
+        # what a real hardware handoff would actually look like. This only
+        # changes MuJoCo's initial qpos, not the policy's own baseline.
+        init_dof_pos=K1_CFG.prepare_state.joint_pos,
+        # Root height for that pose, computed from the foot geom actually
+        # touching the ground -- same pattern beyond_mimic uses to tune
+        # init_pos to its own stance's real height, rather than relying
+        # on the generic 0.6 default (tuned for yet another task's pose).
+        init_pos=[0.0, 0.0, 0.551],
     )

@@ -34,7 +34,31 @@ class MujocoController(BaseController):
                 init_dof_pos,
             ]
         )
+        if self.cfg.mujoco.init_dof_vel is not None:
+            self.mj_data.qvel[6:] = np.array(
+                self.cfg.mujoco.init_dof_vel, dtype=np.float32)
         mujoco.mj_forward(self.mj_model, self.mj_data)
+
+        self._push_body_id = None
+        if self.cfg.mujoco.push_body_name is not None:
+            self._push_body_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY,
+                self.cfg.mujoco.push_body_name,
+            )
+            if self._push_body_id < 0:
+                raise ValueError(
+                    f"push_body_name '{self.cfg.mujoco.push_body_name}' not "
+                    "found in the MJCF."
+                )
+        self._push_steps_per_period = max(
+            1, round(self.cfg.mujoco.push_interval_s / self.cfg.policy_dt))
+        self._push_steps_duration = max(
+            1, round(self.cfg.mujoco.push_duration_s / self.cfg.policy_dt))
+
+        self._push_vel_period_steps = None
+        if self.cfg.mujoco.push_vel_xy is not None:
+            self._push_vel_period_steps = max(
+                1, round(self.cfg.mujoco.push_interval_s / self.cfg.policy_dt))
 
         # render a second "ghost" robot (kinematic only) without
         # modifying the MuJoCo XML. This uses a second MjData to compute FK from
@@ -200,9 +224,41 @@ class MujocoController(BaseController):
                 print(f'saved {self.cfg.mujoco.log_states}.npz '
                       f'at {self._step_count} steps')
 
+    def _update_push(self) -> None:
+        if self._push_body_id is None:
+            return
+        # Skip the first period entirely (let it stabilize first), then
+        # push once per period thereafter. `step_count % period` alone
+        # can't distinguish "just started" from "a full period elapsed"
+        # during that first cycle, so gate on step_count directly too.
+        active = (
+            self._step_count > self._push_steps_per_period
+            and self._step_count % self._push_steps_per_period
+            < self._push_steps_duration
+        )
+        if active:
+            self.mj_data.xfrc_applied[self._push_body_id, :3] = \
+                self.cfg.mujoco.push_force
+        else:
+            self.mj_data.xfrc_applied[self._push_body_id, :3] = 0.0
+
+    def _update_push_vel_kick(self) -> None:
+        if self._push_vel_period_steps is None:
+            return
+        # Single-step event at each period boundary (not a held window),
+        # matching Isaac Gym/legged_gym's push_robots(): it directly
+        # overwrites root qvel[0:2] rather than applying a force.
+        if (self._step_count > 0
+                and self._step_count % self._push_vel_period_steps == 0):
+            max_vel = self.cfg.mujoco.push_vel_xy
+            kick = np.random.uniform(-max_vel, max_vel, size=2)
+            self.mj_data.qvel[0:2] = kick
+
     def ctrl_step(self, dof_targets: torch.Tensor):
         dof_targets = dof_targets.cpu().numpy()  # type: ignore
         self.log_states(dof_targets)
+        self._update_push()
+        self._update_push_vel_kick()
         if self.vel_command is not None:
             self.update_vel_command()
 

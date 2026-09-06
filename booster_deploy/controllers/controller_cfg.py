@@ -21,12 +21,34 @@ class MujocoControllerCfg:
     # obs/action baseline pose differs from the standing pose it should
     # actually be deployed from.
     init_dof_pos: Optional[List[float]] = None
+    # Initial joint velocities for MuJoCo's spawn qvel. Defaults to zero
+    # (a fully at-rest spawn); set this to simulate handing off from a
+    # still-settling pose rather than a static one.
+    init_dof_vel: Optional[List[float]] = None
     decimation: int = 10
     # physics_dt will automatically be set by ControllerCfg
     physics_dt: float = None  # type: ignore
     log_states: Optional[str] = None
     visualize_reference_ghost: bool = False
     ghost_rgba: List[float] = [0.2, 0.8, 0.2, 0.25]
+
+    # Periodic external-force "push" test (a standard sim2real robustness
+    # check): every `push_interval_s`, apply a `push_force` world-frame
+    # Cartesian force (N) to `push_body_name`'s center of mass for
+    # `push_duration_s`, then release it.
+    push_body_name: Optional[str] = None
+    push_force: List[float] = [0.0, 0.0, 0.0]
+    push_interval_s: float = 3.0
+    push_duration_s: float = 0.1
+
+    # Alternative push mechanism matching Isaac Gym/legged_gym's actual
+    # domain-randomization push: instead of a sustained force, directly
+    # *overwrite* the root's XY linear velocity (qvel[0:2]) with a random
+    # kick every `push_interval_s`, each axis sampled uniformly in
+    # [-push_vel_xy, push_vel_xy]. Independent of the force-based push
+    # above -- set this instead when reproducing a specific training
+    # curriculum's push strength (e.g. "50% of max_push_vel_xy").
+    push_vel_xy: Optional[float] = None
 
     # Offscreen video recording (used when no display is available).
     record_video_path: Optional[str] = None
