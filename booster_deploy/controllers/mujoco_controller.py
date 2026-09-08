@@ -335,6 +335,7 @@ class MujocoController(BaseController):
         cam.type = mujoco.mjtCamera.mjCAMERA_FREE
         mujoco.mjv_defaultFreeCamera(self.mj_model, cam)
         cam.distance = 3.0
+        cam.azimuth = 225
         cam.elevation = -20
 
         ghost_scene = None
@@ -384,6 +385,7 @@ class MujocoController(BaseController):
                 self.mj_model, self.mj_data) as viewer:
 
             self.viewer = viewer
+            viewer.cam.azimuth = 225
             viewer.cam.elevation = -20
             if self.vel_command is not None:
                 print("\nSet command (x, y, yaw): ", end="")

@@ -243,6 +243,7 @@ class K1InterMimicControllerCfg(ControllerCfg):
     policy: InterMimicPolicyCfg = InterMimicPolicyCfg()
     mujoco = MujocoControllerCfg(
         visualize_reference_ghost=True,
+        ghost_rgba=[0.6, 1.0, 0.6, 0.12],
         # `robot.default_joint_pos` must stay all-zero (this checkpoint's
         # obs/action baseline), but joint-zero on this robot *is* the
         # T-pose (arms out) -- shoulder_roll=0 is horizontal; every other
