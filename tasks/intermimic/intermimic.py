@@ -48,6 +48,24 @@ class InterMimicPolicy(Policy):
         )
 
     def reset(self) -> None:
+        # The motion loader canonicalizes the *reference* to yaw 0 (see
+        # `_align_to_first_frame`), but nothing canonicalizes the robot --
+        # on hardware `imu_state.rpy[2]` is whatever heading it happens to
+        # face. `rel_ori_6d` below is relative, which makes it invariant to
+        # rotating robot and reference *together*, but not to rotating only
+        # one; without this the clip's absolute heading leaks into the
+        # command block as a constant yaw error the policy tries to correct.
+        # Captured once here (not per-step) so genuine yaw drift is still
+        # observable, and yaw-only so gravity-anchored roll/pitch error is
+        # untouched. Same correction beyond_mimic applies.
+        # Set `yaw_align=False` to reproduce the uncorrected behaviour.
+        if self.cfg.yaw_align:
+            self.init_root_yaw_quat_w_inv = lab_math.quat_inv(
+                lab_math.yaw_quat(self.robot.data.root_quat_w))
+        else:
+            self.init_root_yaw_quat_w_inv = torch.tensor(
+                [1.0, 0.0, 0.0, 0.0], dtype=torch.float32,
+                device=self.cfg.device)
         self.current_frame = 0
         self.last_action = torch.zeros(
             self.robot.num_joints, dtype=torch.float32, device=self.cfg.device)
@@ -132,8 +150,11 @@ class InterMimicPolicy(Policy):
         ref_joint_vel = self.motion.joint_vel[rows]         # (n, 22)
         ref_root_quat = self.motion.body_quat_w[rows, 0]    # (n, 4) wxyz
 
-        cur_quat_inv = lab_math.quat_inv(
-            self.robot.data.root_quat_w.unsqueeze(0)).expand(n, -1)
+        # Robot orientation with its start-of-episode yaw removed, so it
+        # shares the reference's canonical frame (see `reset`).
+        cur_quat = lab_math.quat_mul(
+            self.init_root_yaw_quat_w_inv, self.robot.data.root_quat_w)
+        cur_quat_inv = lab_math.quat_inv(cur_quat.unsqueeze(0)).expand(n, -1)
         rel_quat = lab_math.quat_mul(cur_quat_inv, ref_root_quat)
         rel_ori_6d = lab_math.matrix_from_quat(rel_quat)[..., :2].reshape(n, 6)
 
@@ -203,6 +224,12 @@ class InterMimicPolicyCfg(PolicyCfg):
     num_future_frames: int = 10
     future_frame_stride: int = 5
 
+    # Remove the robot's start-of-episode yaw before forming the reference's
+    # relative orientation, putting robot and clip in a common frame (see
+    # `InterMimicPolicy.reset`). Off = the original uncorrected behaviour,
+    # which is fine only when the robot happens to spawn at yaw 0.
+    yaw_align: bool = True
+
     # Additive uniform observation noise on ±scale, matching the spec's
     # training noise table. Off (0.0) by default; a task opts in.
     noise_projected_gravity: float = 0.0
@@ -240,9 +267,23 @@ class K1InterMimicControllerCfg(ControllerCfg):
         ],
     )
     enable_velocity_commands = False
-    policy: InterMimicPolicyCfg = InterMimicPolicyCfg()
+    policy: InterMimicPolicyCfg = InterMimicPolicyCfg(
+        # Sensor noise. joint_vel dominates jitter by a wide margin --
+        # everything else is nearly negligible next to it. These are
+        # legged_gym-typical magnitudes, NOT the InterMimic training
+        # table (which we don't have a copy of). Set all to 0.0 for a
+        # clean/noiseless run.
+        # noise_projected_gravity=0.05,
+        # noise_base_ang_vel=0.2,
+        # noise_joint_pos=0.01,
+        # noise_joint_vel=0.5,
+        # TEMPORARY: disabled to watch the uncorrected failure. Set back to
+        # True (the default) once you've seen it -- with init_quat at 90 deg
+        # yaw this falls in ~60-95 steps on every seed.
+        yaw_align=True,
+    )
     mujoco = MujocoControllerCfg(
-        visualize_reference_ghost=True,
+        visualize_reference_ghost=False,
         ghost_rgba=[0.6, 1.0, 0.6, 0.12],
         # `robot.default_joint_pos` must stay all-zero (this checkpoint's
         # obs/action baseline), but joint-zero on this robot *is* the
@@ -259,4 +300,31 @@ class K1InterMimicControllerCfg(ControllerCfg):
         # init_pos to its own stance's real height, rather than relying
         # on the generic 0.6 default (tuned for yet another task's pose).
         init_pos=[0.0, 0.0, 0.551],
+        # Spawn facing 35 deg instead of along +x, to exercise the heading
+        # case that only ever occurs on hardware (MuJoCo would otherwise
+        # always spawn at yaw 0, exactly where the reference clip is
+        # canonicalized by the motion loader). Without the yaw correction
+        # in `InterMimicPolicy.reset` the robot topples, because
+        # `rel_ori_6d` lands well outside the checkpoint's own training
+        # distribution (~4 sigma at 35 deg, ~30 sigma at 90).
+        # Set back to [1.0, 0.0, 0.0, 0.0] for the original head-on view.
+        # Caveat when using this to judge the correction: MuJoCo's contact
+        # solver is exactly rotation-symmetric only at 90/180 deg
+        # (open-loop delta 1e-16); at other angles it is not (1.5e-2 at
+        # 45 deg under large motion, with the policy removed entirely),
+        # and that solver noise alone can topple this marginally-stable
+        # policy -- looking like a heading bug when it isn't. Use 90 deg
+        # for a clean A/B; angles like this one are the realistic case.
+        init_quat=[0.95372, 0.0, 0.0, 0.30071],
+        # booster_train trains K1 with min_delay=2 / max_delay=8 physics
+        # steps at its 200Hz sim, i.e. 10-40ms of actuator command lag.
+        actuator_delay_range_s=[0.01, 0.04],
+        torque_speed_curve=True,
+        # Safety-harness support, as during hardware bring-up. Unloading
+        # the legs removes ground-contact damping, which amplifies the
+        # jitter driven by noise_joint_vel above (3.2x more visible motion
+        # at 90% support). Disabled -- set gantry_body_name="trunk" and a
+        # support fraction to re-enable.
+        # gantry_body_name="trunk",
+        # gantry_support_fraction=0.9,
     )

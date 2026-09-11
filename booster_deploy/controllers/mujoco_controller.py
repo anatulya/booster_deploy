@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections import deque
 from time import sleep
 import select
 import numpy as np
@@ -60,6 +61,63 @@ class MujocoController(BaseController):
             self._push_vel_period_steps = max(
                 1, round(self.cfg.mujoco.push_interval_s / self.cfg.policy_dt))
 
+        self._gantry_body_id = None
+        if self.cfg.mujoco.gantry_body_name is not None:
+            self._gantry_body_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY,
+                self.cfg.mujoco.gantry_body_name,
+            )
+            if self._gantry_body_id < 0:
+                raise ValueError(
+                    f"gantry_body_name '{self.cfg.mujoco.gantry_body_name}' "
+                    "not found in the MJCF."
+                )
+            total_weight = (
+                self.mj_model.body_mass.sum()
+                * abs(self.mj_model.opt.gravity[2]))
+            self._gantry_force = np.array([
+                0.0, 0.0,
+                self.cfg.mujoco.gantry_support_fraction * total_weight,
+            ])
+            self._gantry_offset = np.array(
+                self.cfg.mujoco.gantry_attach_offset, dtype=np.float64)
+            print(f"Gantry: {self._gantry_force[2]:.1f}N up on "
+                  f"'{self.cfg.mujoco.gantry_body_name}' "
+                  f"({self.cfg.mujoco.gantry_support_fraction:.0%} of "
+                  f"{total_weight:.1f}N)")
+
+        self._delay_min_steps = 0
+        self._delay_max_steps = 0
+        if self.cfg.mujoco.actuator_delay_range_s is not None:
+            lo_s, hi_s = self.cfg.mujoco.actuator_delay_range_s
+            physics_dt = self.cfg.mujoco.physics_dt
+            self._delay_min_steps = max(0, round(lo_s / physics_dt))
+            self._delay_max_steps = max(
+                self._delay_min_steps, round(hi_s / physics_dt))
+        self._delay_steps = 0
+        self._delay_buffer: deque | None = None
+
+        self._velocity_limit = None
+        self._knee_velocity = None
+        if self.cfg.mujoco.torque_speed_curve:
+            robot_cfg = self.robot.cfg
+            if (robot_cfg.velocity_limit is None
+                    or robot_cfg.knee_point_velocity is None):
+                raise ValueError(
+                    "mujoco.torque_speed_curve requires both "
+                    "RobotCfg.velocity_limit and "
+                    "RobotCfg.knee_point_velocity to be set."
+                )
+            self._velocity_limit = np.array(
+                robot_cfg.velocity_limit, dtype=np.float32)
+            self._knee_velocity = np.clip(
+                np.array(robot_cfg.knee_point_velocity, dtype=np.float32),
+                0.0, self._velocity_limit,
+            )
+            # Guard the v_max == v_knee case, as booster_train does.
+            self._tn_denom = np.maximum(
+                self._velocity_limit - self._knee_velocity, 1e-6)
+
         # render a second "ghost" robot (kinematic only) without
         # modifying the MuJoCo XML. This uses a second MjData to compute FK from
         # generalized coordinates and draws a duplicated set of geoms via
@@ -80,7 +138,34 @@ class MujocoController(BaseController):
     def start(self):
         # Clear reference; policy.reset() may set a fresh one.
         self._reference_qpos = None
+        # Draw this episode's actuator lag, matching booster_train's
+        # per-reset `torch.randint(min_delay, max_delay + 1)`.
+        if self._delay_max_steps > 0:
+            self._delay_steps = int(np.random.randint(
+                self._delay_min_steps, self._delay_max_steps + 1))
+            self._delay_buffer = None  # filled from the first command
+            print(f"Actuator delay this episode: {self._delay_steps} physics "
+                  f"steps ({self._delay_steps * self.cfg.mujoco.physics_dt * 1e3:.0f}ms)")
         return super().start()
+
+    def _delayed_command(self, dof_targets: np.ndarray) -> np.ndarray:
+        """Advance the actuator delay buffer one physics step and return the
+        lagged setpoint.
+
+        Mirrors isaaclab's `DelayBuffer.compute`: push the newest command,
+        read back the entry `_delay_steps` pushes ago. Pre-filling with the
+        first command reproduces its documented warm-up behaviour (return
+        the oldest available entry until the buffer has filled).
+        """
+        if self._delay_max_steps == 0:
+            return dof_targets
+        if self._delay_buffer is None:
+            self._delay_buffer = deque(
+                [dof_targets] * (self._delay_max_steps + 1),
+                maxlen=self._delay_max_steps + 1,
+            )
+        self._delay_buffer.append(dof_targets)
+        return self._delay_buffer[-1 - self._delay_steps]
 
     def render_reference_robot(
         self,
@@ -254,11 +339,47 @@ class MujocoController(BaseController):
             kick = np.random.uniform(-max_vel, max_vel, size=2)
             self.mj_data.qvel[0:2] = kick
 
+    def _update_gantry(self) -> None:
+        """Hold a constant upward support force on the gantry body.
+
+        Written with `=` rather than `+=` so it stays constant instead of
+        accumulating across steps; if the attachment point is offset from
+        the CoM, the resulting moment (r x F, with r rotated into world
+        frame) is applied too, which is what gives a real harness its
+        self-righting behaviour as the robot tilts.
+        """
+        if self._gantry_body_id is None:
+            return
+        self.mj_data.xfrc_applied[self._gantry_body_id, :3] = self._gantry_force
+        if self._gantry_offset.any():
+            rot = self.mj_data.xmat[self._gantry_body_id].reshape(3, 3)
+            r_world = rot @ self._gantry_offset
+            self.mj_data.xfrc_applied[self._gantry_body_id, 3:] = np.cross(
+                r_world, self._gantry_force)
+
+    def _clip_effort(
+        self, effort: np.ndarray, dof_vel: np.ndarray, tau_max: np.ndarray,
+    ) -> np.ndarray:
+        """Clip torque to the motors' piecewise-linear torque-speed curve.
+
+        Ported from booster_train's
+        `BoosterDelayedPDActuator._clip_effort`: the ceiling is `tau_max`
+        while |v| <= knee_point_velocity, then falls linearly to zero at
+        velocity_limit.
+        """
+        if self._velocity_limit is None:
+            return np.clip(effort, -tau_max, tau_max)
+        tau_linear = tau_max * (
+            self._velocity_limit - np.abs(dof_vel)) / self._tn_denom
+        max_effort = np.clip(tau_linear, 0.0, tau_max)
+        return np.clip(effort, -max_effort, max_effort)
+
     def ctrl_step(self, dof_targets: torch.Tensor):
         dof_targets = dof_targets.cpu().numpy()  # type: ignore
         self.log_states(dof_targets)
         self._update_push()
         self._update_push_vel_kick()
+        self._update_gantry()
         if self.vel_command is not None:
             self.update_vel_command()
 
@@ -274,11 +395,9 @@ class MujocoController(BaseController):
         # ]
         ctrl_limit = self.robot.effort_limit.numpy()
         for i in range(self.decimation):
-            self.mj_data.ctrl = np.clip(
-                kp * (dof_targets - dof_pos) - kd * dof_vel,
-                -ctrl_limit,
-                ctrl_limit,
-            )
+            cmd = self._delayed_command(dof_targets)
+            self.mj_data.ctrl = self._clip_effort(
+                kp * (cmd - dof_pos) - kd * dof_vel, dof_vel, ctrl_limit)
             mujoco.mj_step(self.mj_model, self.mj_data)
             dof_pos = self.mj_data.qpos.astype(np.float32)[7:]
             dof_vel = self.mj_data.qvel.astype(np.float32)[6:]
@@ -385,7 +504,7 @@ class MujocoController(BaseController):
                 self.mj_model, self.mj_data) as viewer:
 
             self.viewer = viewer
-            viewer.cam.azimuth = 225
+            viewer.cam.azimuth = 90
             viewer.cam.elevation = -20
             if self.vel_command is not None:
                 print("\nSet command (x, y, yaw): ", end="")

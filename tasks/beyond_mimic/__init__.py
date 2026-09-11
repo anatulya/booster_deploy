@@ -4,6 +4,34 @@ from .beyond_mimic import K1BeyondMimicControllerCfg
 
 
 @configclass
+class K1Smallbox047ControllerCfg(K1BeyondMimicControllerCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.policy.motion_path = "motions/sub4_smallbox_stand_last.npz"
+        self.policy.checkpoint_path = "models/k1_smallbox_047_2026-09-10_14-38-03.pt"
+        self.robot.joint_stiffness = [
+            3.9478, 3.9478,                                              # head
+            3.9478, 3.9478, 3.9478, 3.9478,                              # left arm
+            3.9478, 3.9478, 3.9478, 3.9478,                              # right arm
+            30.2010, 21.4480, 17.8460, 60.4020, 35.6920, 35.6920,        # left leg
+            30.2010, 21.4480, 17.8460, 60.4020, 35.6920, 35.6920,        # right leg
+        ]
+        self.robot.joint_damping = [
+            0.2513, 0.2513,
+            0.2513, 0.2513, 0.2513, 0.2513,
+            0.2513, 0.2513, 0.2513, 0.2513,
+            3.6050, 2.5602, 2.1302, 4.8066, 4.2604, 4.2604,
+            3.6050, 2.5602, 2.1302, 4.8066, 4.2604, 4.2604,
+        ]
+        self.robot.effort_limit = [
+            6.0, 6.0,
+            14.0, 14.0, 14.0, 14.0,
+            14.0, 14.0, 14.0, 14.0,
+            68.0, 76.0, 38.3, 112.0, 38.3, 38.3,
+            68.0, 76.0, 38.3, 112.0, 38.3, 38.3,
+        ]
+
+@configclass
 class K1MJ2ControllerCfg(K1BeyondMimicControllerCfg):
     def __post_init__(self):
         super().__post_init__()
@@ -63,3 +91,4 @@ class K1FightControllerCfg(K1BeyondMimicControllerCfg):
 
 register_task("k1_mj2", K1MJ2ControllerCfg())
 register_task("k1_fight", K1FightControllerCfg())
+register_task("k1_smallbox_047", K1Smallbox047ControllerCfg())

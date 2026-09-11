@@ -50,6 +50,37 @@ class MujocoControllerCfg:
     # curriculum's push strength (e.g. "50% of max_push_vel_xy").
     push_vel_xy: Optional[float] = None
 
+    # Actuator command delay, mirroring booster_train's DelayedPDActuator
+    # (source/booster_train/booster_train/assets/robots/actuator.py): the
+    # joint-position *setpoint* fed to the PD is lagged by a whole number
+    # of physics steps, drawn uniformly from this range once per episode;
+    # the measured state the PD runs against is always current.
+    # Given in SECONDS rather than steps because this repo's physics_dt
+    # (0.002) differs from booster_train's (0.005) -- its min_delay=2 /
+    # max_delay=8 steps at 200Hz is 0.01-0.04s, the default below.
+    actuator_delay_range_s: Optional[List[float]] = None
+
+    # Model the motors' torque-speed (T-N) curve instead of a flat torque
+    # box, mirroring booster_train's `BoosterDelayedPDActuator._clip_effort`:
+    # full `effort_limit` is available up to `knee_point_velocity`, then the
+    # ceiling falls linearly to zero at `velocity_limit`. Requires those two
+    # tables on the robot cfg. Sim-only -- on real hardware the motor driver
+    # enforces its own curve.
+    torque_speed_curve: bool = False
+
+    # Sustained "gantry" support, modelling the safety harness used during
+    # hardware bring-up. Unlike the push above (a brief impulse), this is
+    # held for the whole run. Given as a fraction of the robot's total
+    # weight: 0.5 unloads half its weight, 1.0 fully suspends it.
+    gantry_body_name: Optional[str] = None
+    gantry_support_fraction: float = 0.0
+    # Attachment point in the body's local frame. A real harness attaches
+    # ABOVE the CoM, so a vertical cable also produces a restoring moment
+    # when the robot tilts -- that pendulum effect is part of what the
+    # gantry does, not just weight relief. Leave at zero to apply a pure
+    # force through the CoM with no moment.
+    gantry_attach_offset: List[float] = [0.0, 0.0, 0.0]
+
     # Offscreen video recording (used when no display is available).
     record_video_path: Optional[str] = None
     record_video_seconds: float = 15.0
@@ -81,6 +112,13 @@ class RobotCfg:
 
     default_joint_pos: List[float] = MISSING
     effort_limit: List[float] = MISSING
+
+    # Motor torque-speed data (rad/s), per joint, in `joint_names` order.
+    # Available torque is flat up to `knee_point_velocity` then falls
+    # linearly to zero at `velocity_limit`. Both must be set together for
+    # MujocoControllerCfg.torque_speed_curve to have anything to work with.
+    velocity_limit: Optional[List[float]] = None
+    knee_point_velocity: Optional[List[float]] = None
 
     mjcf_path: str = MISSING
 

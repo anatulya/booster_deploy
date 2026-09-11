@@ -1,4 +1,5 @@
 from ..controllers.controller_cfg import PrepareStateCfg, RobotCfg
+from .actuator import K1_MOTORS
 
 
 K1_CFG = RobotCfg(
@@ -80,6 +81,10 @@ K1_CFG = RobotCfg(
         30, 35, 20, 40, 20, 20,
         30, 35, 20, 40, 20, 20,
     ],
+    # Motor torque-speed data, from the vendor motor models in
+    # `actuator.py` (K1_MOTORS is in this same joint_names order).
+    velocity_limit=[m.velocity_limit for m in K1_MOTORS],
+    knee_point_velocity=[m.knee_point_velocity for m in K1_MOTORS],
     sim_joint_names=[       # joint order in isaacsim/isaaclab
         "AAHead_yaw",
         "ALeft_Shoulder_Pitch",
