@@ -99,6 +99,7 @@ class HoiTrackPolicy(Policy):
         self.holding = self.cfg.hold_start_frame
         self.hold_step = 0
         self.transition: StartTransition | None = None
+        self._object_pinned = False
         self.last_action = torch.zeros(
             self.robot.num_joints, dtype=torch.float32, device=self.cfg.device)
         # Deliberately NOT computed here. BaseController.start() calls policy.reset() before the controller
@@ -137,10 +138,18 @@ class HoiTrackPolicy(Policy):
         self.reference_to_robot_quat = lab_math.quat_inv(self.align_quat)
         self.reference_origin_w = self.robot.data.root_pos_w.clone()
         self.reference_origin_w[2] = self.ref["ref_anchor_pos_w"][0, 2]
-        # While holding the first frame the object stays parked (see MujocoController); it is placed on release.
         if not self.holding:
+            if not self._object_pinned:
+                self._place_object()
+            return
+        if self.cfg.pin_object_during_hold and hasattr(self.controller, "pin_object"):
+            # Put the object at its frame-0 pose now and hold it there until the motion starts, as it would be
+            # set down by hand on hardware. Otherwise it stays parked and is placed on release.
             self._place_object()
-        elif self.cfg.start_vel_tau_s > 0:
+            if self.cfg.object_body_name is not None:
+                self.controller.pin_object(self.cfg.object_body_name)  # type: ignore
+                self._object_pinned = True
+        if self.cfg.start_vel_tau_s > 0:
             # Reference is frame 0 at once; its velocity points there from where the robot is and decays.
             self.transition = StartTransition(
                 start_pos=self.robot.data.joint_pos[self.real2sim],
@@ -151,14 +160,19 @@ class HoiTrackPolicy(Policy):
     def release_motion(self) -> None:
         """Start the motion from wherever the hold left the robot.
 
-        The policy can drift while holding frame 0, so the reference is re-aligned to the robot's pose at
-        release, and the object placed relative to that, the way training resets robot and object together.
-        Clearing align_quat defers both to the next observation, after the controller has refreshed robot.data.
+        If the object was pinned in place during the hold, it is simply let go, and the reference keeps the
+        alignment it was placed with. Otherwise (hardware, or pinning off) the policy may have drifted while
+        holding frame 0, so the reference is re-aligned to the robot's pose at release, and the object placed
+        relative to that, the way training resets robot and object together. Clearing align_quat defers both
+        to the next observation, after the controller has refreshed robot.data.
         """
         if self.holding and self._can_release():
             super().release_motion()
-            self.align_quat = None
             self.transition = None
+            if self._object_pinned:
+                self.controller.unpin_object(self.cfg.object_body_name)  # type: ignore
+            else:
+                self.align_quat = None
 
     def _pose_in_robot_world(
         self, pos: torch.Tensor, quat: torch.Tensor
@@ -333,6 +347,10 @@ class HoiTrackPolicyCfg(PolicyCfg):
     # Yaw-align the ghost humanoid trajectory and object position while keeping
     # the object quaternion exactly as stored. Takes precedence over the option above.
     align_object_to_robot: bool = False
+
+    # Simulation: while holding the first frame, place the object at its frame-0 pose and hold it fixed there
+    # until the motion starts, instead of placing it on release.
+    pin_object_during_hold: bool = True
 
     # Free-floating scene body to place at the clip's starting object pose on reset. None runs without an
     # object, which still exercises the observation layout and gait but gives the hands nothing to close on.

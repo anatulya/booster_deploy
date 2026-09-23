@@ -159,6 +159,10 @@ class MujocoController(BaseController):
         # Reference qpos can be set explicitly by the policy.
         self._reference_qpos: np.ndarray | None = None
 
+        # Scene bodies held fixed at a pose (see pin_object): name -> (qpos
+        # slice, dof start, pinned qpos).
+        self._pins: dict[str, tuple[slice, int, np.ndarray]] = {}
+
     def start(self):
         # Clear reference; policy.reset() may set a fresh one.
         self._reference_qpos = None
@@ -251,6 +255,23 @@ class MujocoController(BaseController):
             self._ghost_mj_data.qpos[sl] = np.concatenate(
                 [ghost_pos, ghost_quat])
             mujoco.mj_forward(self.mj_model, self._ghost_mj_data)
+
+    def pin_object(self, body_name: str) -> None:
+        """Hold a free-floating scene body fixed at its current pose, like an
+        object set down by hand before the motion starts. It still collides,
+        but as if immovable, until unpin_object()."""
+        sl = self.object_qpos_slice(body_name)
+        bid = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        dof = int(self.mj_model.jnt_dofadr[self.mj_model.body_jntadr[bid]])
+        self._pins[body_name] = (sl, dof, self.mj_data.qpos[sl].copy())
+
+    def unpin_object(self, body_name: str) -> None:
+        self._pins.pop(body_name, None)
+
+    def _apply_pins(self) -> None:
+        for sl, dof, qpos in self._pins.values():
+            self.mj_data.qpos[sl] = qpos
+            self.mj_data.qvel[dof: dof + 6] = 0.0
 
     def set_reference_qpos(
         self,
@@ -473,7 +494,9 @@ class MujocoController(BaseController):
                    else dof_targets)
             self.mj_data.ctrl = self._clip_effort(
                 kp * (cmd - dof_pos) - kd * dof_vel, dof_vel, ctrl_limit)
+            self._apply_pins()
             mujoco.mj_step(self.mj_model, self.mj_data)
+            self._apply_pins()
             dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
             dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
 
