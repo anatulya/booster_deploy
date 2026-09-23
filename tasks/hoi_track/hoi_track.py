@@ -12,6 +12,7 @@ from booster_deploy.controllers.controller_cfg import (
 from booster_deploy.robots.booster import K1_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
+from booster_deploy.utils.start_transition import StartTransition
 
 
 class HoiTrackPolicy(Policy):
@@ -88,8 +89,14 @@ class HoiTrackPolicy(Policy):
         self.real2sim = self.robot.data.real2sim_joint_indexes
         self.sim2real = self.robot.data.sim2real_joint_indexes
 
+    # Zeroed while holding the first frame, so the held reference is static like the one past the clip's end.
+    HOLD_ZEROED = ("ref_joint_vel", "ref_object_lin_vel_refroot", "ref_object_ang_vel_refroot")
+
     def reset(self) -> None:
         self.current_frame = 0
+        self.holding = self.cfg.hold_start_frame
+        self.hold_step = 0
+        self.transition: StartTransition | None = None
         self.last_action = torch.zeros(
             self.robot.num_joints, dtype=torch.float32, device=self.cfg.device)
         # Deliberately NOT computed here. BaseController.start() calls policy.reset() before the controller
@@ -128,7 +135,28 @@ class HoiTrackPolicy(Policy):
         self.reference_to_robot_quat = lab_math.quat_inv(self.align_quat)
         self.reference_origin_w = self.robot.data.root_pos_w.clone()
         self.reference_origin_w[2] = self.ref["ref_anchor_pos_w"][0, 2]
-        self._place_object()
+        # While holding the first frame the object stays parked (see MujocoController); it is placed on release.
+        if not self.holding:
+            self._place_object()
+        elif self.cfg.start_vel_tau_s > 0:
+            # Reference is frame 0 at once; its velocity points there from where the robot is and decays.
+            self.transition = StartTransition(
+                start_pos=self.robot.data.joint_pos[self.real2sim],
+                goal_pos=self.ref["ref_joint_pos"][0],
+                tau_s=self.cfg.start_vel_tau_s,
+            )
+
+    def release_motion(self) -> None:
+        """Start the motion from wherever the hold left the robot.
+
+        The policy can drift while holding frame 0, so the reference is re-aligned to the robot's pose at
+        release, and the object placed relative to that, the way training resets robot and object together.
+        Clearing align_quat defers both to the next observation, after the controller has refreshed robot.data.
+        """
+        if self.holding and self._can_release():
+            super().release_motion()
+            self.align_quat = None
+            self.transition = None
 
     def _pose_in_robot_world(
         self, pos: torch.Tensor, quat: torch.Tensor
@@ -174,27 +202,40 @@ class HoiTrackPolicy(Policy):
     def _rows(self) -> torch.Tensor:
         """Clip-clamped frame index per horizon offset, matching ``MotionCommand._refresh_reference_frames``."""
         last = self.num_frames - 1
+        if self.holding:
+            # Every offset on frame 0, as they all clamp to the last frame once the clip has ended.
+            return torch.zeros(len(self.horizon), dtype=torch.long, device=self.cfg.device)
         return torch.tensor(
             [min(self.current_frame + k, last) for k in self.horizon],
             dtype=torch.long, device=self.cfg.device)
 
-    def _ref_anchor_ori_b(self, rows: torch.Tensor) -> torch.Tensor:
+    def _ref_anchor_ori_b(self, ref_quat: torch.Tensor) -> torch.Tensor:
         """Reference anchor orientation in the robot's frame, 6D, one row per horizon offset.
 
         The same quantity ``BeyondMimicPolicy`` forms as ``motion_anchor_ori_b``, evaluated at each offset.
         The anchor body is the Trunk, which is the K1's root, so the robot side is just ``root_quat_w``.
         """
+        n = ref_quat.shape[0]
         cur = lab_math.quat_mul(self.align_quat, self.robot.data.root_quat_w)
-        cur_inv = lab_math.quat_inv(cur.unsqueeze(0)).expand(rows.numel(), -1)
-        rel = lab_math.quat_mul(cur_inv, self.ref["ref_anchor_quat_w"][rows])
-        return lab_math.matrix_from_quat(rel)[..., :2].reshape(rows.numel(), 6)
+        cur_inv = lab_math.quat_inv(cur.unsqueeze(0)).expand(n, -1)
+        rel = lab_math.quat_mul(cur_inv, ref_quat)
+        return lab_math.matrix_from_quat(rel)[..., :2].reshape(n, 6)
 
     def compute_observation(self) -> torch.Tensor:
         self._lazy_init()
         rows = self._rows()
-        self.cmd_dof_pos = self.ref["ref_joint_pos"][rows[0]]
+        ref_joint_pos = self.ref["ref_joint_pos"][rows]
+        ref_joint_vel = self.ref["ref_joint_vel"][rows]
+        ref_anchor_quat = self.ref["ref_anchor_quat_w"][rows]
+        if self.holding and self.transition is not None:
+            # Each horizon offset previews the transition curve ahead, as it previews the motion otherwise.
+            dt = self.controller.cfg.policy_dt
+            samples = [self.transition.sample((self.hold_step + k) * dt) for k in self.horizon]
+            ref_joint_pos = torch.stack([s[0] for s in samples])
+            ref_joint_vel = torch.stack([s[1] for s in samples])
+        self.cmd_dof_pos = ref_joint_pos[0]
         self.cmd_root_pos_w = self.ref["ref_anchor_pos_w"][rows[0]]
-        self.cmd_root_quat_w = self.ref["ref_anchor_quat_w"][rows[0]]
+        self.cmd_root_quat_w = ref_anchor_quat[0]
 
         joint_pos = (self.robot.data.joint_pos[self.real2sim]
                      - self.ref["default_joint_pos"])
@@ -211,10 +252,19 @@ class HoiTrackPolicy(Policy):
             self.last_action,
             motion_phase,
         ]
-        anchor_ori = self._ref_anchor_ori_b(rows)
+        anchor_ori = self._ref_anchor_ori_b(ref_anchor_quat)
         for i, row in enumerate(rows):
             for j, name in enumerate(self.BLOCK):
-                parts.append(anchor_ori[i] if name is None else self.ref[name][row])
+                if name is None:
+                    parts.append(anchor_ori[i])
+                elif name == "ref_joint_pos":
+                    parts.append(ref_joint_pos[i])
+                elif name == "ref_joint_vel" and self.transition is not None:
+                    parts.append(ref_joint_vel[i])
+                elif self.holding and name in self.HOLD_ZEROED:
+                    parts.append(torch.zeros_like(self.ref[name][row]))
+                else:
+                    parts.append(self.ref[name][row])
 
         obs = torch.cat(parts, dim=0)
         if obs.numel() != self.obs_dim:
@@ -238,7 +288,10 @@ class HoiTrackPolicy(Policy):
                  self.cmd_dof_pos[self.sim2real]], dim=0)
             self.controller.set_reference_qpos(ref_qpos)    # type: ignore
 
-        self.current_frame += 1
+        if self.holding:
+            self.hold_step += 1
+        else:
+            self.current_frame += 1
         self.last_action = action
 
         if self.cfg.enable_safety_fallback:
@@ -318,9 +371,9 @@ class K1HoiTrackControllerCfg(ControllerCfg):
     mujoco = MujocoControllerCfg(
         # Scene with the captured suitcase: `python scripts/make_object_scene.py suitcase_0539923`.
         scene_mjcf_path="{BOOSTER_ASSETS_DIR}/robots/K1/K1_22dof_suitcase.xml",
-        # Start where hardware hands over to the policy: upright, in prepare_state.joint_pos, which
-        # BoosterRobotPortal ramps to right after entering custom mode. 0.551 puts that pose's feet on the
-        # floor. This deliberately does NOT match training, which resets onto the clip's frame-0 pose.
+        # Spawn where custom mode starts from: upright, in prepare_state.joint_pos. 0.551 puts that pose's
+        # feet on the floor. The policy then brings the robot to the clip's frame-0 pose itself and holds it
+        # (PolicyCfg.hold_start_frame) until the motion is released.
         init_pos=[0.0, 0.0, 0.551],
         init_dof_pos=list(K1_CFG.prepare_state.joint_pos),
         visualize_reference_ghost=False,

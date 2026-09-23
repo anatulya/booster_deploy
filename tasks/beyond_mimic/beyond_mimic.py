@@ -14,6 +14,7 @@ from booster_deploy.robots.booster import K1_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
 from booster_deploy.utils.motion_loader import MotionLoader
+from booster_deploy.utils.start_transition import StartTransition
 
 
 class BeyondMimicPolicy(Policy):
@@ -51,6 +52,9 @@ class BeyondMimicPolicy(Policy):
         self.anchor_index = self.motion.track_body_names.index(
             self.cfg.anchor_body_name)
         self.current_frame = 0
+        self.holding = self.cfg.hold_start_frame
+        self.hold_step = 0
+        self.transition: StartTransition | None = None
         self.last_action = torch.zeros(
             self.robot.num_joints,
             dtype=torch.float32, device=self.cfg.device)
@@ -61,11 +65,32 @@ class BeyondMimicPolicy(Policy):
 
         self.cmd_dof_pos = self.motion.joint_pos[row_ids]
         self.cmd_dof_vel = self.motion.joint_vel[row_ids]
+        if self.holding:
+            # Static reference, like the hold at the end of the clip.
+            self.cmd_dof_vel = torch.zeros_like(self.cmd_dof_vel)
+            if self.cfg.start_vel_tau_s > 0:
+                self._apply_start_transition()
 
         self.cmd_root_pos_w = self.motion.body_pos_w[
             row_ids, self.anchor_index]
         self.cmd_root_quat_w = self.motion.body_quat_w[
             row_ids, self.anchor_index]
+
+    def _apply_start_transition(self):
+        """Reference is frame 0 at once; its velocity points there from where the robot is and decays."""
+        if self.transition is None:
+            self.transition = StartTransition(
+                start_pos=self.robot.data.joint_pos[self.robot.data.real2sim_joint_indexes],
+                goal_pos=self.cmd_dof_pos,
+                tau_s=self.cfg.start_vel_tau_s,
+            )
+        self.cmd_dof_pos, self.cmd_dof_vel = self.transition.sample(
+            self.hold_step * self.controller.cfg.policy_dt)
+
+    def release_motion(self) -> None:
+        if self.holding and self._can_release():
+            super().release_motion()
+            self.transition = None
 
     def compute_observation(self) -> torch.Tensor:
         """Computes observations"""
@@ -127,7 +152,10 @@ class BeyondMimicPolicy(Policy):
             )
             self.controller.set_reference_qpos(ref_qpos)    # type: ignore
 
-        self.current_frame += 1
+        if self.holding:
+            self.hold_step += 1
+        else:
+            self.current_frame += 1
         self.last_action = action
 
         if action is None:
@@ -186,6 +214,8 @@ class K1BeyondMimicControllerCfg(ControllerCfg):
     enable_velocity_commands = False
     policy: BeyondMimicPolicyCfg = BeyondMimicPolicyCfg()
     mujoco = MujocoControllerCfg(
-        init_pos=[0.0, 0.0, 0.57],
+        # Spawn in the prepare pose that custom mode starts from.
+        init_pos=[0.0, 0.0, 0.551],
+        init_dof_pos=list(K1_CFG.prepare_state.joint_pos),
         visualize_reference_ghost=False,
     )

@@ -93,6 +93,11 @@ class MujocoControllerCfg:
     # to 640x480 if the XML doesn't set one).
     record_video_width: int = 640
     record_video_height: int = 480
+    # Sets PolicyCfg.hold_start_frame for sim runs: the policy holds the
+    # motion's first frame until 'g' is pressed. With record_video_path
+    # there is no key input, so it is released after auto_release_after_s.
+    hold_start_frame: bool = True
+    auto_release_after_s: float = 3.0
 
 
 @configclass
@@ -151,6 +156,18 @@ class PolicyCfg:
     checkpoint_path: str = MISSING
     enable_safety_fallback: bool = True
     device: str | torch.device = "cpu"
+    # Motion-tracking policies: start with the reference frozen at the
+    # motion's first frame (velocities zeroed, like the static hold at the
+    # clip's end) until release_motion() is called. Ignored by others.
+    # Only the MuJoCo controller releases it so far (see
+    # MujocoControllerCfg.hold_start_frame); keep off for the real robot.
+    hold_start_frame: bool = False
+    # While holding, the joint position reference is the first frame from
+    # the start, and its velocity reference points there from the robot's
+    # pose, decaying with this time constant (see StartTransition). The
+    # motion can't be released until 5 tau has passed. 0 gives a plain step
+    # to the first frame with zero velocity.
+    start_vel_tau_s: float = 0.5
 
 
 @configclass

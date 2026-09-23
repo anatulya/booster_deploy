@@ -10,10 +10,12 @@ import mujoco
 import mujoco.viewer
 from booster_assets import BOOSTER_ASSETS_DIR
 from .base_controller import BaseController, ControllerCfg, VelocityCommand
+from ..utils.remote_control_service import RemoteControlService
 
 
 class MujocoController(BaseController):
     def __init__(self, cfg: ControllerCfg):
+        cfg.policy.hold_start_frame = cfg.mujoco.hold_start_frame
         super().__init__(cfg)
 
         # A task may supply a scene that adds bodies (e.g. an object to manipulate) around the robot. The
@@ -51,6 +53,16 @@ class MujocoController(BaseController):
             self.mj_data.qvel[6: self._nv_robot] = np.array(
                 self.cfg.mujoco.init_dof_vel, dtype=np.float32)
         mujoco.mj_forward(self.mj_model, self.mj_data)
+
+        # A task's manipulated object is placed by its policy when the motion
+        # starts. Until then park it out of the robot's way: the scene spawns
+        # it right beside the robot, where the start-up would knock it away.
+        object_body_name = getattr(self.cfg.policy, "object_body_name", None)
+        if object_body_name is not None and self.cfg.mujoco.hold_start_frame:
+            sl = self.object_qpos_slice(object_body_name)
+            parked = self.mj_data.qpos[sl].copy()
+            parked[:2] = self.mj_data.qpos[:2] + np.array([-2.0, 0.0])
+            self.set_object_pose(object_body_name, parked[:3], parked[3:])
 
         self._push_body_id = None
         if self.cfg.mujoco.push_body_name is not None:
@@ -436,10 +448,19 @@ class MujocoController(BaseController):
         if self.vel_command is not None:
             self.update_vel_command()
 
+        self._pd_step(
+            dof_targets,
+            self.robot.joint_stiffness.numpy(),
+            self.robot.joint_damping.numpy(),
+            use_delay=True,
+        )
+
+    def _pd_step(self, dof_targets: np.ndarray, kp: np.ndarray,
+                 kd: np.ndarray, use_delay: bool = False) -> None:
+        """Run one control step (`decimation` physics steps) of PD tracking
+        towards `dof_targets`."""
         dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
         dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
-        kp = self.robot.joint_stiffness.numpy()
-        kd = self.robot.joint_damping.numpy()
         # ctrl_limit = [
         #     np.minimum(self.mj_model.actuator_forcerange[:, 0],
         #                self.mj_model.actuator_ctrlrange[:, 0]),
@@ -448,12 +469,53 @@ class MujocoController(BaseController):
         # ]
         ctrl_limit = self.robot.effort_limit.numpy()
         for i in range(self.decimation):
-            cmd = self._delayed_command(dof_targets)
+            cmd = (self._delayed_command(dof_targets) if use_delay
+                   else dof_targets)
             self.mj_data.ctrl = self._clip_effort(
                 kp * (cmd - dof_pos) - kd * dof_vel, dof_vel, ctrl_limit)
             mujoco.mj_step(self.mj_model, self.mj_data)
             dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
             dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
+
+    def _start_sequence(self, remote: RemoteControlService | None):
+        """Mirror BoosterRobotPortal's custom-mode start-up before the
+        policy runs, yielding once per control step so the caller can render.
+
+        Hold the spawn pose until custom mode is requested ('x'), ramp to the
+        prepare pose with the prepare-state gains, and hold it until the
+        policy is started ('r'). With no `remote` (headless recording) both
+        waits are skipped.
+        """
+        prepare_state = self.robot.cfg.prepare_state
+        kp = np.array(prepare_state.stiffness, dtype=np.float32)
+        kd = np.array(prepare_state.damping, dtype=np.float32)
+        prepare_pos = np.array(prepare_state.joint_pos, dtype=np.float32)
+        spawn_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
+
+        def hold(target):
+            self._update_gantry()
+            self._pd_step(target, kp, kd)
+
+        if remote is not None:
+            print(remote.get_custom_mode_operation_hint())
+            while not remote.start_custom_mode():
+                hold(spawn_pos)
+                yield
+        num = max(1, round(1.0 / self.cfg.policy_dt))  # 1s, as on the robot
+        for target in np.linspace(spawn_pos, prepare_pos, num=num,
+                                  dtype=np.float32):
+            hold(target)
+            yield
+        print("Custom mode started, initialized with prepare pose")
+
+        if remote is not None:
+            hint = remote.get_rl_gait_operation_hint()
+            if self.cfg.policy.hold_start_frame:
+                hint += " It first holds the motion's first frame."
+            print(hint)
+            while not remote.start_rl_gait():
+                hold(prepare_pos)
+                yield
 
     def _composite_ghost_geoms(self, renderer, ghost_scene, cam) -> None:
         """Copy the ghost robot's geoms into `renderer`'s scene as an overlay.
@@ -525,26 +587,38 @@ class MujocoController(BaseController):
         ]
         proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
-        if self.vel_command is not None:
-            print("\nSet command (x, y, yaw): ", end="")
-        self.update_state()
-        self.start()
+        def write_frame():
+            cam.lookat[:] = self.mj_data.qpos.astype(np.float32)[0:3]
+            renderer.update_scene(self.mj_data, camera=cam)
+            if ghost_scene is not None:
+                self._composite_ghost_geoms(renderer, ghost_scene, cam)
+            frame = renderer.render()
+            proc.stdin.write(frame.tobytes())
 
         try:
-            for _ in range(n_steps):
+            # No key input when headless: the start sequence runs unattended,
+            # and a first-frame hold is released after auto_release_after_s.
+            # Start-sequence frames are recorded too; record_video_seconds
+            # counts policy time only.
+            for _ in self._start_sequence(None):
+                write_frame()
+
+            if self.vel_command is not None:
+                print("\nSet command (x, y, yaw): ", end="")
+            self.update_state()
+            self.start()
+            release_step = round(
+                self.cfg.mujoco.auto_release_after_s / self.cfg.policy_dt)
+            for step in range(n_steps):
                 if not self.is_running:
                     break
+                if (step >= release_step and self.policy.holding
+                        and self.policy._start_transition_remaining_s() == 0):
+                    self.policy.release_motion()
                 self.update_state()
                 dof_targets = self.policy_step()
                 self.ctrl_step(dof_targets)
-
-                cam.lookat[:] = self.mj_data.qpos.astype(np.float32)[0:3]
-                renderer.update_scene(self.mj_data, camera=cam)
-                if ghost_scene is not None:
-                    self._composite_ghost_geoms(renderer, ghost_scene, cam)
-
-                frame = renderer.render()
-                proc.stdin.write(frame.tobytes())
+                write_frame()
         finally:
             proc.stdin.close()
             proc.wait()
@@ -559,16 +633,8 @@ class MujocoController(BaseController):
             self.viewer = viewer
             viewer.cam.azimuth = 180
             viewer.cam.elevation = -20
-            if self.vel_command is not None:
-                print("\nSet command (x, y, yaw): ", end="")
-            self.update_state()
-            self.start()
-            while viewer.is_running() and self.is_running:
-                sleep(self.cfg.mujoco.physics_dt * self.cfg.mujoco.decimation)
-                self.update_state()
-                dof_targets = self.policy_step()
-                self.ctrl_step(dof_targets)
 
+            def sync_viewer():
                 if self.cfg.mujoco.visualize_reference_ghost:
                     # Render kinematic "ghost" robot from generalized coordinates.
                     self.render_reference_robot(
@@ -578,6 +644,39 @@ class MujocoController(BaseController):
 
                 self.viewer.cam.lookat[:] = self.mj_data.qpos.astype(np.float32)[0:3]
                 self.viewer.sync()
+
+            # Same keys as the real robot (terminal 'x' / 'r', or a gamepad),
+            # plus 'g' to release a policy holding its first frame. Closed as
+            # soon as nothing is held, so the terminal leaves cbreak mode, as
+            # update_vel_command reads whole lines from stdin.
+            remote: RemoteControlService | None = RemoteControlService()
+            try:
+                for _ in self._start_sequence(remote):
+                    if not viewer.is_running():
+                        return
+                    sleep(self.cfg.policy_dt)
+                    sync_viewer()
+
+                self.update_state()
+                self.start()
+                if self.policy.holding:
+                    print(remote.get_start_motion_operation_hint())
+                while viewer.is_running() and self.is_running:
+                    if remote is not None and not self.policy.holding:
+                        remote.close()
+                        remote = None
+                        if self.vel_command is not None:
+                            print("\nSet command (x, y, yaw): ", end="")
+                    elif remote is not None and remote.start_motion():
+                        self.policy.release_motion()
+                    sleep(self.cfg.mujoco.physics_dt * self.cfg.mujoco.decimation)
+                    self.update_state()
+                    dof_targets = self.policy_step()
+                    self.ctrl_step(dof_targets)
+                    sync_viewer()
+            finally:
+                if remote is not None:
+                    remote.close()
 
     def run(self):
         if self.cfg.mujoco.record_video_path:

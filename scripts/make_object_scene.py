@@ -35,7 +35,7 @@ import xml.etree.ElementTree as ET
 # Both captured URDFs declare 0.1 kg, and that is the nominal mass booster_train randomizes around. The scene
 # uses MASS instead, with the URDF's diagonal inertia scaled by the same ratio so the object does not become
 # denser than its size implies. Applies to whichever object is generated.
-MASS = 0.5
+MASS = 1.0
 ROLLING_FRICTION = 0.0001  # MuJoCo's third friction component; the URDF's rolling_friction fills the second
 
 # Perturbation applied on top of the deterministic values above -- resampled every time this script runs, so

@@ -96,6 +96,10 @@ class VelocityCommand(Commands):
 
 
 class Policy:
+    # True while a motion-tracking policy holds its first frame; see
+    # PolicyCfg.hold_start_frame.
+    holding: bool = False
+
     def __init__(self, cfg: PolicyCfg, controller: BaseController):
         self.cfg = cfg
         self.controller = controller
@@ -106,6 +110,27 @@ class Policy:
     @abstractmethod
     def reset(self) -> None:
         """Called when the controller starts."""
+
+    def release_motion(self) -> None:
+        """Stop holding the first frame and start advancing the motion."""
+        if self.holding:
+            self.holding = False
+            print("Motion started")
+
+    def _start_transition_remaining_s(self) -> float:
+        """Seconds until a StartTransition (if any) reaches the first frame."""
+        transition = getattr(self, "transition", None)
+        if transition is None:
+            return 0.0
+        return max(0.0, transition.duration_s - self.hold_step
+                   * self.controller.cfg.policy_dt)
+
+    def _can_release(self) -> bool:
+        remaining = self._start_transition_remaining_s()
+        if remaining > 0.0:
+            print(f"Still moving to the start pose ({remaining:.1f}s left)")
+            return False
+        return True
 
     @abstractmethod
     def inference(self) -> torch.Tensor:

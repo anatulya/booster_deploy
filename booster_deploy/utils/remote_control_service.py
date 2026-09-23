@@ -66,11 +66,15 @@ class RemoteControlService:
             return "Press joystick button A to start rl Gait."
         return "Press keyboard 'r' to start rl Gait."
 
+    def get_start_motion_operation_hint(self) -> str:
+        return "Press keyboard 'g' to start the motion."
+
     def _init_keyboard_control(self):
         self.joystick = None
         self.joystick_runner = None
         self.keyboard_start_custom_mode = False
         self.keyboard_start_rl_gait = False
+        self.keyboard_start_motion = False
 
     def _start_keyboard_thread(self):
         # Start a thread that reads stdin in cbreak mode and dispatches presses.
@@ -134,6 +138,8 @@ class RemoteControlService:
             self.keyboard_start_custom_mode = True
         if key == "r":
             self.keyboard_start_rl_gait = True
+        if key == "g":
+            self.keyboard_start_motion = True
         if key == "w":
             old_x = self.vx
             self.vx += 0.1
@@ -224,6 +230,11 @@ class RemoteControlService:
         if hasattr(self, "joystick") and getattr(self, "joystick") is not None:
             return self.joystick.active_keys() == [self.config.rl_gait_button]
         return self.keyboard_start_rl_gait
+
+    def start_motion(self) -> bool:
+        """Check if the motion was released ('g'); keyboard only, used by the
+        MuJoCo controller for policies holding their first frame."""
+        return getattr(self, "keyboard_start_motion", False)
 
     def _run_joystick(self):
         """Poll joystick events."""
