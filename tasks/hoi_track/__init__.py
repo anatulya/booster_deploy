@@ -18,7 +18,9 @@ from .hoi_track import K1HoiTrackControllerCfg
 _TASK_DIR = Path(__file__).resolve().parent
 
 # Adding a genuinely new object only requires an entry here and its MuJoCo
-# scene. Motions and checkpoints for known objects require no Python changes.
+# scene (`python scripts/make_object_scene.py <folder under booster_assets/objects/>`
+# writes K1_22dof_<object>.xml). Motions and checkpoints for known objects
+# require no Python changes.
 OBJECTS = {
     "suitcase": {
         "body_name": "suitcase",
