@@ -48,19 +48,19 @@ YAW_RANGE_DEG = 30.0         # +/- deg about the world z-axis; roll/pitch are un
 FRICTION_RANGE = (0.2, 1.2)  # sliding coefficient sampled uniformly in this range
 
 
-def read_urdf(path: str) -> tuple[float, float, float, float]:
-    """(mass, diagonal inertia, lateral friction, rolling friction) from a single-link object URDF."""
+def read_urdf(path: str) -> tuple[float, list[float], float, float]:
+    """(mass, diagonal inertia [ixx, iyy, izz], lateral friction, rolling friction) from a single-link object URDF."""
     link = ET.parse(path).getroot().find("link")
     inertial = link.find("inertial")
     mass = float(inertial.find("mass").get("value"))
     inertia = inertial.find("inertia")
     diag = [float(inertia.get(k)) for k in ("ixx", "iyy", "izz")]
-    if len(set(diag)) != 1:
-        raise SystemExit(f"{path}: non-uniform inertia {diag}; this script only writes diaginertia with one value")
+    if any(float(inertia.get(k, 0)) != 0 for k in ("ixy", "ixz", "iyz")):
+        raise SystemExit(f"{path}: off-diagonal inertia; this script only writes diaginertia")
     contact = link.find("contact")
     lateral = float(contact.find("lateral_friction").get("value"))
     rolling = float(contact.find("rolling_friction").get("value"))
-    return mass, diag[0], lateral, rolling
+    return mass, diag, lateral, rolling
 
 
 def main() -> None:
@@ -100,7 +100,7 @@ def main() -> None:
     mesh_rel = os.path.relpath(mesh_path, meshdir)
 
     urdf_mass, urdf_inertia, lateral, rolling = read_urdf(urdf_path)
-    diag_inertia = urdf_inertia * MASS / urdf_mass
+    diag_inertia = [i * MASS / urdf_mass for i in urdf_inertia]
     friction = (lateral, rolling, ROLLING_FRICTION)
 
     asset = f'    <mesh name="{name}" file="{mesh_rel}"/>\n'
@@ -125,7 +125,7 @@ def main() -> None:
     <body name="{name}" pos="{x} {y} {z}" quat="{quat[0]} {quat[1]} {quat[2]} {quat[3]}">
       <freejoint name="{name}_free"/>
       <inertial pos="0 0 0" mass="{MASS}"
-                diaginertia="{diag_inertia} {diag_inertia} {diag_inertia}"/>
+                diaginertia="{diag_inertia[0]} {diag_inertia[1]} {diag_inertia[2]}"/>
       <geom name="{name}_geom" type="mesh" mesh="{name}"
             friction="{sliding} {friction[1]} {friction[2]}"
             rgba="0.45 0.45 0.5 1" condim="4"/>
@@ -137,7 +137,7 @@ def main() -> None:
     print(f"[INFO] object: {args.object} -> body '{name}', mesh {mesh_rel}")
 
     print(f"[INFO] fixed: mass={MASS} kg (URDF {urdf_mass} kg), "
-          f"diaginertia={diag_inertia:.6f} (URDF {urdf_inertia}), "
+          f"diaginertia={[round(i, 6) for i in diag_inertia]} (URDF {urdf_inertia}), "
           f"friction(torsional,rolling)=({friction[1]}, {friction[2]})")
     if args.no_perturb:
         print(f"[INFO] perturbation off (--no_perturb): "

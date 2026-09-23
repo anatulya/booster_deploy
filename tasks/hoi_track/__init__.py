@@ -36,6 +36,13 @@ OBJECTS = {
         "yaw_align": True,
         "align_object_to_robot": True,
     },
+    "smallbox": {
+        "body_name": "smallbox",
+        "scene": "{BOOSTER_ASSETS_DIR}/robots/K1/K1_22dof_smallbox.xml",
+        "align_object_yaw": False,
+        "yaw_align": True,
+        "align_object_to_robot": True,
+    },
 }
 
 

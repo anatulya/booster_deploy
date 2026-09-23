@@ -96,8 +96,11 @@ class VelocityCommand(Commands):
 
 
 class Policy:
-    # True while a motion-tracking policy holds its first frame; see
-    # PolicyCfg.hold_start_frame.
+    # Whether this policy can hold its motion's first frame
+    # (PolicyCfg.hold_start_frame). A class attribute so the robot portal can
+    # read it before the policy is built in the inference process.
+    supports_start_hold: bool = False
+    # True while a motion-tracking policy holds its first frame.
     holding: bool = False
 
     def __init__(self, cfg: PolicyCfg, controller: BaseController):
@@ -214,7 +217,27 @@ class BaseController:
         self._step_count = 0
         self._elapsed_s = 0.0
         self.is_running = True
+        self._release_requested = False
+        self._release_wait_reported = False
         self.policy.reset()
+
+    def request_motion_release(self) -> None:
+        """Ask a policy holding its first frame to start the motion. Kept
+        until the start cue has finished (see StartTransition), so an early
+        press is remembered rather than dropped. Idempotent."""
+        self._release_requested = True
+
+    def _maybe_release_motion(self) -> None:
+        if not (self._release_requested and self.policy.holding):
+            return
+        remaining = self.policy._start_transition_remaining_s()
+        if remaining > 0:
+            if not self._release_wait_reported:
+                print(f"Still moving to the start pose; the motion starts "
+                      f"in {remaining:.1f}s")
+                self._release_wait_reported = True
+            return
+        self.policy.release_motion()
 
     def policy_step(self) -> torch.Tensor:
         """Execute one inference step and return the action.
@@ -228,6 +251,7 @@ class BaseController:
         self._step_count += 1
         self._elapsed_s = self._step_count * self.cfg.policy_dt
 
+        self._maybe_release_motion()
         return self.policy.inference()
 
     def stop(self) -> None:

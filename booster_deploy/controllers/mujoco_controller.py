@@ -510,7 +510,8 @@ class MujocoController(BaseController):
 
         if remote is not None:
             hint = remote.get_rl_gait_operation_hint()
-            if self.cfg.policy.hold_start_frame:
+            if (self.cfg.policy.hold_start_frame
+                    and self.cfg.policy.constructor.supports_start_hold):
                 hint += " It first holds the motion's first frame."
             print(hint)
             while not remote.start_rl_gait():
@@ -612,9 +613,8 @@ class MujocoController(BaseController):
             for step in range(n_steps):
                 if not self.is_running:
                     break
-                if (step >= release_step and self.policy.holding
-                        and self.policy._start_transition_remaining_s() == 0):
-                    self.policy.release_motion()
+                if step == release_step:
+                    self.request_motion_release()
                 self.update_state()
                 dof_targets = self.policy_step()
                 self.ctrl_step(dof_targets)
@@ -668,7 +668,7 @@ class MujocoController(BaseController):
                         if self.vel_command is not None:
                             print("\nSet command (x, y, yaw): ", end="")
                     elif remote is not None and remote.start_motion():
-                        self.policy.release_motion()
+                        self.request_motion_release()
                     sleep(self.cfg.mujoco.physics_dt * self.cfg.mujoco.decimation)
                     self.update_state()
                     dof_targets = self.policy_step()

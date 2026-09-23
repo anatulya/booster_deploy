@@ -89,6 +89,8 @@ class HoiTrackPolicy(Policy):
         self.real2sim = self.robot.data.real2sim_joint_indexes
         self.sim2real = self.robot.data.sim2real_joint_indexes
 
+    supports_start_hold = True
+
     # Zeroed while holding the first frame, so the held reference is static like the one past the clip's end.
     HOLD_ZEROED = ("ref_joint_vel", "ref_object_lin_vel_refroot", "ref_object_ang_vel_refroot")
 

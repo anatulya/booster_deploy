@@ -18,6 +18,8 @@ from booster_deploy.utils.start_transition import StartTransition
 
 
 class BeyondMimicPolicy(Policy):
+    supports_start_hold = True
+
     def __init__(self, cfg: BeyondMimicPolicyCfg, controller: BaseController):
         super().__init__(cfg, controller)
         self.cfg = cfg

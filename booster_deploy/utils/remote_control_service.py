@@ -39,6 +39,9 @@ class RemoteControlService:
         self.config = config or JoystickConfig()
         self._lock = threading.Lock()
         self._running = True
+        # rl_gait_button presses since arm_start_motion(); counted from key
+        # events so a tap between polls isn't missed.
+        self._rl_gait_presses = 0
         try:
             self._init_joystick()
             self._start_joystick_thread()
@@ -67,6 +70,8 @@ class RemoteControlService:
         return "Press keyboard 'r' to start rl Gait."
 
     def get_start_motion_operation_hint(self) -> str:
+        if hasattr(self, "joystick") and getattr(self, "joystick") is not None:
+            return "Press joystick button A again to start the motion."
         return "Press keyboard 'g' to start the motion."
 
     def _init_keyboard_control(self):
@@ -231,9 +236,20 @@ class RemoteControlService:
             return self.joystick.active_keys() == [self.config.rl_gait_button]
         return self.keyboard_start_rl_gait
 
+    def arm_start_motion(self) -> None:
+        """Start listening for the start-motion input. Called once the policy
+        has started, so the press that started it (or an early double-tap)
+        can't also start the motion."""
+        with self._lock:
+            self._rl_gait_presses = 0
+        self.keyboard_start_motion = False
+
     def start_motion(self) -> bool:
-        """Check if the motion was released ('g'); keyboard only, used by the
-        MuJoCo controller for policies holding their first frame."""
+        """Check if the motion was released since arm_start_motion(): the RL
+        gait button pressed again, or keyboard 'g'."""
+        if hasattr(self, "joystick") and getattr(self, "joystick") is not None:
+            with self._lock:
+                return self._rl_gait_presses >= 1
         return getattr(self, "keyboard_start_motion", False)
 
     def _run_joystick(self):
@@ -245,6 +261,11 @@ class RemoteControlService:
                 if event:
                     if event.type == evdev.ecodes.EV_ABS:
                         self._handle_axis(event.code, event.value)
+                    elif (event.type == evdev.ecodes.EV_KEY
+                          and event.code == self.config.rl_gait_button
+                          and event.value == 1):  # key down
+                        with self._lock:
+                            self._rl_gait_presses += 1
                 else:
                     time.sleep(0.01)
             except Exception as e:

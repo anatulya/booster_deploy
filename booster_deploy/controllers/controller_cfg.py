@@ -104,6 +104,9 @@ class MujocoControllerCfg:
 class BoosterRobotControllerCfg:
     low_state_dt: float = 0.002
     metrics_max_events: int = 2000
+    # Sets PolicyCfg.hold_start_frame on the robot: after A the policy holds
+    # the motion's first frame, and A pressed again starts the motion.
+    hold_start_frame: bool = True
 
 
 @configclass
@@ -159,8 +162,8 @@ class PolicyCfg:
     # Motion-tracking policies: start with the reference frozen at the
     # motion's first frame (velocities zeroed, like the static hold at the
     # clip's end) until release_motion() is called. Ignored by others.
-    # Only the MuJoCo controller releases it so far (see
-    # MujocoControllerCfg.hold_start_frame); keep off for the real robot.
+    # Set per backend by MujocoControllerCfg.hold_start_frame and
+    # BoosterRobotControllerCfg.hold_start_frame.
     hold_start_frame: bool = False
     # While holding, the joint position reference is the first frame from
     # the start, and its velocity reference points there from the robot's

@@ -69,6 +69,9 @@ class BoosterRobotPortal:
         self.remoteControlService = RemoteControlService()
         # Use multiprocessing.Event for inter-process communication
         self.exit_event = mp.Event()
+        # Set when the operator starts the motion of a policy holding its
+        # first frame (PolicyCfg.hold_start_frame).
+        self.motion_release_event = mp.Event()
         self.is_running = True
         self.timer = CountTimer(
             self.cfg.booster.low_state_dt, use_sim_time=use_sim_time)
@@ -354,6 +357,8 @@ class BoosterRobotPortal:
         if self.exit_event.is_set():
             return False
 
+        self.remoteControlService.arm_start_motion()
+
         # start inference process (separate process)
         self.inference_process = mp.Process(
             target=BoosterRobotPortal.inference_process_func,
@@ -366,8 +371,15 @@ class BoosterRobotPortal:
         self.inference_process.start()
         self.logger.info("Inference process started")
 
+        if self._holds_start_frame():
+            print("Holding the motion's first frame. "
+                  f"{self.remoteControlService.get_start_motion_operation_hint()}")
         print(f"{self.remoteControlService.get_operation_hint()}")
         return True
+
+    def _holds_start_frame(self) -> bool:
+        return (self.cfg.booster.hold_start_frame
+                and self.cfg.policy.constructor.supports_start_hold)
 
     def cleanup(self) -> None:
         """Clean up resources (idempotent)."""
@@ -446,6 +458,10 @@ class BoosterRobotPortal:
         else:
             # main loop: wait for exit signal
             while self.is_running and not self.exit_event.is_set():
+                if (not self.motion_release_event.is_set()
+                        and self._holds_start_frame()
+                        and self.remoteControlService.start_motion()):
+                    self.motion_release_event.set()
                 # check whether the inference process is alive
                 if self.inference_process is not None:
                     inference_process_alive = self.inference_process.is_alive()
@@ -480,6 +496,7 @@ class BoosterRobotController(BaseController):
     separate process forked by BoosterRobotPortal.
     '''
     def __init__(self, cfg: ControllerCfg, portal: BoosterRobotPortal) -> None:
+        cfg.policy.hold_start_frame = cfg.booster.hold_start_frame
         super().__init__(cfg)
         self.portal = portal
 
@@ -548,6 +565,8 @@ class BoosterRobotController(BaseController):
             self.update_state()
             if self.vel_command is not None:
                 self.update_vel_command()
+            if self.portal.motion_release_event.is_set():
+                self.request_motion_release()
             self.portal.metrics["policy_step"].mark()
             dof_targets = self.policy_step()
             self.ctrl_step(dof_targets)
