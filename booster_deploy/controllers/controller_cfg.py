@@ -14,6 +14,10 @@ class PrepareStateCfg:
 
 @configclass
 class MujocoControllerCfg:
+    # Scene model to load instead of the bare robot MJCF, for tasks that need other bodies in the
+    # world (an object to manipulate, furniture). The robot must be defined first in it, so its free
+    # joint stays at qpos[0:7]. None loads robot.cfg.mjcf_path as before.
+    scene_mjcf_path: Optional[str] = None
     init_pos: List[float] = [0.0, 0.0, 0.6]
     init_quat: List[float] = [1.0, 0.0, 0.0, 0.0]
     # Initial joint angles for MuJoCo's spawn qpos. Defaults to

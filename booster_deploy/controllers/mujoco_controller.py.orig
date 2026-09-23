@@ -232,13 +232,7 @@ class MujocoController(BaseController):
         self.mj_data.qvel[dof: dof + 6] = 0.0
         mujoco.mj_forward(self.mj_model, self.mj_data)
         if hasattr(self, "_ghost_mj_data"):
-            ghost_pos = pos if ghost_pos is None else np.asarray(
-                ghost_pos, dtype=np.float64).reshape(3)
-            ghost_quat = quat if ghost_quat is None else np.asarray(
-                ghost_quat, dtype=np.float64).reshape(4)
-            self._ghost_mj_data.qpos[sl] = np.concatenate(
-                [ghost_pos, ghost_quat])
-            mujoco.mj_forward(self.mj_model, self._ghost_mj_data)
+            self._ghost_mj_data.qpos[sl] = self.mj_data.qpos[sl]
 
     def set_reference_qpos(
         self,

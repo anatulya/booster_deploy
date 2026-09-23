@@ -187,5 +187,5 @@ class K1BeyondMimicControllerCfg(ControllerCfg):
     policy: BeyondMimicPolicyCfg = BeyondMimicPolicyCfg()
     mujoco = MujocoControllerCfg(
         init_pos=[0.0, 0.0, 0.57],
-        visualize_reference_ghost=True,
+        visualize_reference_ghost=False,
     )
