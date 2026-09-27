@@ -22,6 +22,15 @@ parser.add_argument("--record", type=str, default=None,
                          "Use this when running headless.")
 parser.add_argument("--record-seconds", type=float, default=15.0,
                     help="mujoco --record only: length of the recorded clip in seconds.")
+parser.add_argument("--scene", type=str, default=None,
+                    help="mujoco only: override the task's MJCF scene, e.g. "
+                         "{BOOSTER_ASSETS_DIR}/robots/K1/K1_22dof_parallel_largebox.xml for the parallel-ankle robot.")
+parser.add_argument("--decimation", type=int, default=None,
+                    help="mujoco only: physics steps per 20 ms policy step (default 10, i.e. 2 ms). The parallel-ankle "
+                         "MJCF is tuned for 1 ms: use 20.")
+parser.add_argument("--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "VYAW"),
+                    help="mujoco only: initial velocity command for velocity tasks. Needed with --record, which "
+                         "has no terminal input; interactively it can still be changed by typing 'x y yaw'.")
 parser.add_argument(
     "--device", type=str, default="cpu",
     help="Device to run the evaluation on (e.g., 'cpu', 'cuda')")
@@ -75,8 +84,20 @@ def main():
         if args.record:
             task_cfg.mujoco.record_video_path = args.record
             task_cfg.mujoco.record_video_seconds = args.record_seconds
+        if args.scene:
+            task_cfg.mujoco.scene_mjcf_path = args.scene
+        if args.decimation:
+            task_cfg.mujoco.decimation = args.decimation
+            task_cfg.mujoco.physics_dt = task_cfg.policy_dt / args.decimation
 
-        MujocoController(task_cfg).run()
+        controller = MujocoController(task_cfg)
+        if args.cmd:
+            if controller.vel_command is None:
+                print(f"--cmd ignored: task '{args.task}' takes no velocity command")
+            else:
+                cmd = controller.vel_command
+                cmd.lin_vel_x, cmd.lin_vel_y, cmd.ang_vel_yaw = args.cmd
+        controller.run()
     else:
         # initialize network and run robot portal
         try:

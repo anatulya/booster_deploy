@@ -102,5 +102,13 @@ def discover_hoi_tasks() -> None:
         cfg.mujoco.scene_mjcf_path = object_cfg["scene"]
         register_task(f"k1_hoi_{clip}", cfg)
 
+        # Every model for this clip is also reachable by name, so a new export can be compared against the
+        # default without renaming files: k1_hoi_<clip>@<model filename without .pt>.
+        for model in sorted((_TASK_DIR / "models").glob(f"*{clip}*.pt")):
+            alt = K1HoiTrackControllerCfg()
+            alt.policy = cfg.policy.replace(checkpoint_path=str(model.relative_to(_TASK_DIR)))
+            alt.mujoco.scene_mjcf_path = object_cfg["scene"]
+            register_task(f"k1_hoi_{clip}@{model.stem}", alt)
+
 
 discover_hoi_tasks()

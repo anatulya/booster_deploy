@@ -28,30 +28,39 @@ class MujocoController(BaseController):
         # so the plain single-robot tasks are untouched.
         self._nq_robot = 7 + self.robot.num_joints
         self._nv_robot = 6 + self.robot.num_joints
-        if self.mj_model.nq < self._nq_robot:
-            raise ValueError(
-                f"{mjcf_path} has nq={self.mj_model.nq}, too small for a {self.robot.num_joints}-dof "
-                "free-floating robot")
         self.mj_model.opt.timestep = self.cfg.mujoco.physics_dt
         self.decimation = self.cfg.mujoco.decimation
         self.mj_data = mujoco.MjData(self.mj_model)
         mujoco.mj_resetData(self.mj_model, self.mj_data)
+        # Robot joints by name, not by a contiguous slice: a parallel-ankle model interleaves linkage joints
+        # (drive hinges, rod balls) with the 22 serial ones. For the serial models these are exactly 7..28 / 6..27.
+        self._jq, self._jv = self._robot_joint_addresses()
+        self._ankles = ParallelAnkle.from_model(self.mj_model, self._robot_joint_names)
+        if self._ankles:
+            print(f"Parallel ankles: {[a.side for a in self._ankles]} driven through their linkage "
+                  f"(physics_dt {self.cfg.mujoco.physics_dt * 1000:.1f} ms)")
+            if self.cfg.mujoco.physics_dt > 0.001 + 1e-9:
+                print("[WARN] the parallel MJCF is tuned for a 1 ms step; its loop constraints are soft at "
+                      f"{self.cfg.mujoco.physics_dt * 1000:.1f} ms. Run with --decimation 20.")
+        self._joint_torque = np.zeros(self.robot.num_joints, dtype=np.float32)
 
         init_dof_pos = (
             np.array(self.cfg.mujoco.init_dof_pos, dtype=np.float32)
             if self.cfg.mujoco.init_dof_pos is not None
             else self.robot.default_joint_pos.numpy()
         )
-        self.mj_data.qpos[: self._nq_robot] = np.concatenate(
+        self.mj_data.qpos[:7] = np.concatenate(
             [
                 np.array(self.cfg.mujoco.init_pos, dtype=np.float32),
                 np.array(self.cfg.mujoco.init_quat, dtype=np.float32),
-                init_dof_pos,
             ]
         )
+        self.mj_data.qpos[self._jq] = init_dof_pos
         if self.cfg.mujoco.init_dof_vel is not None:
-            self.mj_data.qvel[6: self._nv_robot] = np.array(
+            self.mj_data.qvel[self._jv] = np.array(
                 self.cfg.mujoco.init_dof_vel, dtype=np.float32)
+        for ankle in self._ankles:
+            ankle.close_loop(self.mj_data)  # linkage consistent with the spawn ankle angles
         mujoco.mj_forward(self.mj_model, self.mj_data)
 
         # A task's manipulated object is placed by its policy when the motion
@@ -162,6 +171,22 @@ class MujocoController(BaseController):
         # Scene bodies held fixed at a pose (see pin_object): name -> (qpos
         # slice, dof start, pinned qpos).
         self._pins: dict[str, tuple[slice, int, np.ndarray]] = {}
+
+    def _robot_joint_addresses(self) -> tuple[np.ndarray, np.ndarray]:
+        """qpos / qvel addresses of the robot's hinge joints, in model order, skipping parallel-linkage joints."""
+        m = self.mj_model
+        names, jq, jv = [], [], []
+        for j in range(m.njnt):
+            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, j) or ""
+            if m.jnt_type[j] != mujoco.mjtJoint.mjJNT_HINGE or "_drive_" in name or "_rod_" in name:
+                continue
+            names.append(name)
+            jq.append(m.jnt_qposadr[j])
+            jv.append(m.jnt_dofadr[j])
+        if len(jq) != self.robot.num_joints:
+            raise ValueError(f"MJCF has {len(jq)} robot hinge joints, expected {self.robot.num_joints}: {names}")
+        self._robot_joint_names = names
+        return np.array(jq), np.array(jv)
 
     def start(self):
         # Clear reference; policy.reset() may set a fresh one.
@@ -292,14 +317,19 @@ class MujocoController(BaseController):
             qpos_np = np.asarray(qpos)
 
         qpos_np = qpos_np.astype(np.float32, copy=False).reshape(-1)
-        if qpos_np.shape[0] not in (int(self.mj_model.nq), self._nq_robot):
+        nq_robot = 7 + self.robot.num_joints
+        if qpos_np.shape[0] not in (int(self.mj_model.nq), nq_robot):
             raise ValueError(
-                f"reference qpos must have shape (nq,) or (nq_robot,), got {qpos_np.shape} "
-                f"(nq={int(self.mj_model.nq)}, nq_robot={self._nq_robot})"
+                f"reference qpos must have shape (nq,) or (7 + num_joints,), got {qpos_np.shape} "
+                f"(nq={int(self.mj_model.nq)}, 7 + num_joints={nq_robot})"
             )
-        # A scene task passes the robot's slice only; leave any other body's ghost where it already is.
+        # A scene task passes the robot's base + joints only; leave any other body's ghost where it already is.
         self._reference_qpos = self._ghost_mj_data.qpos.copy()
-        self._reference_qpos[: qpos_np.shape[0]] = qpos_np
+        if qpos_np.shape[0] == nq_robot:
+            self._reference_qpos[:7] = qpos_np[:7]
+            self._reference_qpos[self._jq] = qpos_np[7:]
+        else:
+            self._reference_qpos[:] = qpos_np
         # FK + offset
         self._ghost_mj_data.qpos[:] = self._reference_qpos
         self._ghost_mj_data.qvel[:] = 0.0
@@ -315,9 +345,16 @@ class MujocoController(BaseController):
 
     def update_vel_command(self):
         cmd: VelocityCommand = self.vel_command
+        if getattr(self, "_stdin_eof", False):
+            return
         if select.select([sys.stdin], [], [], 0)[0]:
             try:
-                parts = sys.stdin.readline().strip().split()
+                line = sys.stdin.readline()
+                if not line:
+                    # stdin closed (piped or backgrounded run): keep the current command.
+                    self._stdin_eof = True
+                    return
+                parts = line.strip().split()
                 if len(parts) == 3:
                     (cmd.lin_vel_x, cmd.lin_vel_y, cmd.ang_vel_yaw) = map(float, parts)
                     print(
@@ -336,9 +373,9 @@ class MujocoController(BaseController):
                 )
 
     def update_state(self) -> None:
-        dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
-        dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
-        dof_torque = self.mj_data.qfrc_actuator[6:].astype(np.float32)
+        dof_pos = self.mj_data.qpos.astype(np.float32)[self._jq]
+        dof_vel = self.mj_data.qvel.astype(np.float32)[self._jv]
+        dof_torque = self._joint_torque.copy()
 
         base_pos_w = self.mj_data.qpos.astype(np.float32)[:3]
         base_quat = self.mj_data.qpos.astype(np.float32)[3:7]
@@ -377,9 +414,9 @@ class MujocoController(BaseController):
             base_quat = self.mj_data.qpos.astype(np.float32)[3:7]
             base_lin_vel_b = self.mj_data.qvel.astype(np.float32)[:3]
             base_ang_vel_b = self.mj_data.qvel.astype(np.float32)[3:6]
-            dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
-            dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
-            dof_torque = self.mj_data.qfrc_actuator[6:].astype(np.float32)
+            dof_pos = self.mj_data.qpos.astype(np.float32)[self._jq]
+            dof_vel = self.mj_data.qvel.astype(np.float32)[self._jv]
+            dof_torque = self._joint_torque.copy()
 
             self._states['root_pos_w'].append(base_pos_w)
             self._states['root_quat_w'].append(base_quat)
@@ -460,6 +497,16 @@ class MujocoController(BaseController):
         max_effort = np.clip(tau_linear, 0.0, tau_max)
         return np.clip(effort, -max_effort, max_effort)
 
+    def _clip_effort_one(self, effort: np.ndarray, vel: np.ndarray, joint_index: int) -> np.ndarray:
+        """Torque-speed clip with joint ``joint_index``'s motor parameters, applied to motor-space values."""
+        tau_max = float(self.robot.effort_limit.numpy()[joint_index])
+        if self._velocity_limit is None:
+            return np.clip(effort, -tau_max, tau_max)
+        v_max, v_knee = self._velocity_limit[joint_index], self._knee_velocity[joint_index]
+        tau_linear = tau_max * (v_max - np.abs(vel)) / max(v_max - v_knee, 1e-6)
+        max_effort = np.clip(tau_linear, 0.0, tau_max)
+        return np.clip(effort, -max_effort, max_effort)
+
     def ctrl_step(self, dof_targets: torch.Tensor):
         dof_targets = dof_targets.cpu().numpy()  # type: ignore
         self.log_states(dof_targets)
@@ -480,8 +527,8 @@ class MujocoController(BaseController):
                  kd: np.ndarray, use_delay: bool = False) -> None:
         """Run one control step (`decimation` physics steps) of PD tracking
         towards `dof_targets`."""
-        dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
-        dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
+        dof_pos = self.mj_data.qpos.astype(np.float32)[self._jq]
+        dof_vel = self.mj_data.qvel.astype(np.float32)[self._jv]
         # ctrl_limit = [
         #     np.minimum(self.mj_model.actuator_forcerange[:, 0],
         #                self.mj_model.actuator_ctrlrange[:, 0]),
@@ -492,13 +539,25 @@ class MujocoController(BaseController):
         for i in range(self.decimation):
             cmd = (self._delayed_command(dof_targets) if use_delay
                    else dof_targets)
-            self.mj_data.ctrl = self._clip_effort(
-                kp * (cmd - dof_pos) - kd * dof_vel, dof_vel, ctrl_limit)
+            tau = kp * (cmd - dof_pos) - kd * dof_vel
+            ctrl = self._clip_effort(tau, dof_vel, ctrl_limit)
+            joint_torque = ctrl.copy()
+            # Parallel ankles: the joint-space PD torque on pitch/roll is carried by the two drive motors, so it
+            # is mapped into motor space and clipped there (per motor, on its own speed), not per serial joint.
+            for ankle in self._ankles:
+                i_p, i_r = ankle.pitch_index, ankle.roll_index
+                tau_m, tau_joint = ankle.motor_torques(
+                    self.mj_data, np.array([tau[i_p], tau[i_r]]),
+                    lambda t, v: self._clip_effort_one(t, v, i_p))
+                ctrl[i_p], ctrl[i_r] = tau_m  # ctrl slots of pitch/roll are the drive a/b motors
+                joint_torque[i_p], joint_torque[i_r] = tau_joint
+            self.mj_data.ctrl = ctrl
+            self._joint_torque = joint_torque
             self._apply_pins()
             mujoco.mj_step(self.mj_model, self.mj_data)
             self._apply_pins()
-            dof_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
-            dof_vel = self.mj_data.qvel.astype(np.float32)[6: self._nv_robot]
+            dof_pos = self.mj_data.qpos.astype(np.float32)[self._jq]
+            dof_vel = self.mj_data.qvel.astype(np.float32)[self._jv]
 
     def _start_sequence(self, remote: RemoteControlService | None):
         """Mirror BoosterRobotPortal's custom-mode start-up before the
@@ -513,7 +572,7 @@ class MujocoController(BaseController):
         kp = np.array(prepare_state.stiffness, dtype=np.float32)
         kd = np.array(prepare_state.damping, dtype=np.float32)
         prepare_pos = np.array(prepare_state.joint_pos, dtype=np.float32)
-        spawn_pos = self.mj_data.qpos.astype(np.float32)[7: self._nq_robot]
+        spawn_pos = self.mj_data.qpos.astype(np.float32)[self._jq]
 
         def hold(target):
             self._update_gantry()
@@ -706,3 +765,121 @@ class MujocoController(BaseController):
             self._run_offscreen(self.cfg.mujoco.record_video_path)
         else:
             self._run_interactive()
+
+
+def _rot_y(t: float) -> np.ndarray:
+    c, s_ = np.cos(t), np.sin(t)
+    return np.array([[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]])
+
+
+def _rot_x(t: float) -> np.ndarray:
+    c, s_ = np.cos(t), np.sin(t)
+    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s_], [0.0, s_, c]])
+
+
+class ParallelAnkle:
+    """One ankle of a parallel-linkage MJCF (e.g. K1_22dof_parallel.xml): two shank-mounted drive motors whose
+    cranks push rods onto the foot, with the serial pitch/roll joints left passive.
+
+    The controller keeps commanding the serial joints, as the real robot's firmware accepts; this class turns
+    the joint-space ankle torque into the two motor torques and back. With ``theta = f(pitch, roll)`` the drive
+    angles implied by the loop closure ``|tip(theta) - anchor(pitch, roll)| = L``, and ``J = d theta / d(pitch,
+    roll)``, virtual work gives ``tau_joint = J^T tau_motor``. Motor torques are clipped per motor, on the
+    motor's own speed ``theta_dot = J q_dot``, and the torque actually delivered is mapped back for logging.
+
+    Geometry is read from the model: every frame involved (knee, drive bodies, rod bodies, roll link) must be
+    unrotated relative to its parent, which is how Booster's file is written; this is checked.
+    """
+
+    def __init__(self, model: mujoco.MjModel, side: str, robot_joint_names: list[str]):
+        def body(name):
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid < 0:
+                raise KeyError(name)
+            if not np.allclose(model.body_quat[bid], [1, 0, 0, 0]):
+                raise ValueError(f"parallel ankle: body {name} is rotated relative to its parent")
+            return bid
+
+        def site(name):
+            return model.site_pos[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)].copy()
+
+        def joint(name):
+            return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+
+        self.side = side
+        self.pitch_index = robot_joint_names.index(f"{side}_ankle_pitch_joint")
+        self.roll_index = robot_joint_names.index(f"{side}_ankle_roll_joint")
+        jp, jr = joint(f"{side}_ankle_pitch_joint"), joint(f"{side}_ankle_roll_joint")
+        if not (np.allclose(model.jnt_axis[jp], [0, 1, 0]) and np.allclose(model.jnt_axis[jr], [1, 0, 0])):
+            raise ValueError("parallel ankle: expected pitch about y and roll about x")
+        self.q_pitch, self.q_roll = model.jnt_qposadr[jp], model.jnt_qposadr[jr]
+        self.v_pitch, self.v_roll = model.jnt_dofadr[jp], model.jnt_dofadr[jr]
+        self.ankle = model.body_pos[body(f"{side}_ankle_pitch_link")].copy()
+        self.drives = []
+        for x in "ab":
+            jd = joint(f"{side}_ankle_drive_{x}_joint")
+            jb = joint(f"{side}_ankle_rod_{x}_ball")
+            if not np.allclose(model.jnt_axis[jd], [0, 1, 0]):
+                raise ValueError("parallel ankle: expected drive hinges about y")
+            self.drives.append(dict(
+                hinge=model.body_pos[body(f"{side}_ankle_drive_{x}_body")].copy(),
+                tip0=model.body_pos[body(f"{side}_ankle_rod_{x}")].copy(),
+                rod_end=site(f"{side}_ankle_rod_{x}_end"),
+                anchor=site(f"{side}_ankle_{x}_anchor"),
+                q=model.jnt_qposadr[jd], v=model.jnt_dofadr[jd], ball_q=model.jnt_qposadr[jb],
+            ))
+            self.drives[-1]["L"] = float(np.linalg.norm(self.drives[-1]["rod_end"]))
+
+    @classmethod
+    def from_model(cls, model: mujoco.MjModel, robot_joint_names: list[str]) -> list["ParallelAnkle"]:
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "left_ankle_drive_a_joint") < 0:
+            return []
+        return [cls(model, side, robot_joint_names) for side in ("left", "right")]
+
+    def _anchor(self, d: dict, pitch: float, roll: float) -> np.ndarray:
+        return self.ankle + _rot_y(pitch) @ _rot_x(roll) @ d["anchor"]
+
+    def _tip(self, d: dict, theta: float) -> np.ndarray:
+        return d["hinge"] + _rot_y(theta) @ d["tip0"]
+
+    def jacobian(self, data: mujoco.MjData) -> np.ndarray:
+        """d(theta_a, theta_b)/d(pitch, roll) at the current state, by implicit differentiation of the closure."""
+        pitch, roll = float(data.qpos[self.q_pitch]), float(data.qpos[self.q_roll])
+        J = np.zeros((2, 2))
+        for i, d in enumerate(self.drives):
+            theta = float(data.qpos[d["q"]])
+            diff = self._tip(d, theta) - self._anchor(d, pitch, roll)
+            dtip = np.cross([0.0, 1.0, 0.0], _rot_y(theta) @ d["tip0"])
+            dA_dp = np.cross([0.0, 1.0, 0.0], _rot_y(pitch) @ _rot_x(roll) @ d["anchor"])
+            dA_dr = _rot_y(pitch) @ np.cross([1.0, 0.0, 0.0], _rot_x(roll) @ d["anchor"])
+            g_theta = 2.0 * diff @ dtip
+            J[i, 0] = (2.0 * diff @ dA_dp) / g_theta
+            J[i, 1] = (2.0 * diff @ dA_dr) / g_theta
+        return J
+
+    def motor_torques(self, data: mujoco.MjData, tau_joint: np.ndarray, clip) -> tuple[np.ndarray, np.ndarray]:
+        J = self.jacobian(data)
+        tau_m = np.linalg.solve(J.T, tau_joint)
+        vel = np.array([data.qvel[d["v"]] for d in self.drives])
+        tau_m = clip(tau_m, vel)
+        return tau_m, J.T @ tau_m
+
+    def close_loop(self, data: mujoco.MjData) -> None:
+        """Set drive angles and rod orientations so the loop closes at the current pitch/roll."""
+        pitch, roll = float(data.qpos[self.q_pitch]), float(data.qpos[self.q_roll])
+        for d in self.drives:
+            anchor = self._anchor(d, pitch, roll)
+            theta = 0.0
+            for _ in range(50):
+                diff = self._tip(d, theta) - anchor
+                f = diff @ diff - d["L"] ** 2
+                if abs(f) < 1e-14:
+                    break
+                theta -= f / (2.0 * diff @ np.cross([0.0, 1.0, 0.0], _rot_y(theta) @ d["tip0"]))
+            data.qpos[d["q"]] = theta
+            # rod: rotate its rest direction onto tip -> anchor, expressed in the (rotated) drive frame
+            want = _rot_y(theta).T @ (anchor - self._tip(d, theta))
+            a, b = d["rod_end"] / np.linalg.norm(d["rod_end"]), want / np.linalg.norm(want)
+            axis, w = np.cross(a, b), 1.0 + a @ b
+            quat = np.array([w, *axis])
+            data.qpos[d["ball_q"]: d["ball_q"] + 4] = quat / np.linalg.norm(quat)
