@@ -1,0 +1,4 @@
+{"event": "start", "t_wall": 1790907076.2902446, "step": 0, "holding": true}
+{"event": "motion_released", "t_wall": 1790907076.5928276, "step": 151}
+{"event": "safety_stop", "t_wall": 1790907077.458525, "step": 604, "reason": "safety_fallback"}
+{"event": "close", "t_wall": 1790907077.5116758}

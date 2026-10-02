@@ -186,6 +186,10 @@ class ControllerCfg:
     """
 
     policy_dt: float = 0.02
+    # Registry name, set by scripts/deploy.py; recorded in logs so a replay can rebuild the task.
+    task_name: Optional[str] = None
+    # Directory for the per-step observation log (see booster_deploy/utils/obs_logger.py); None disables it.
+    log_dir: Optional[str] = None
     robot: RobotCfg = MISSING
     vel_command: Optional[VelocityCommandCfg] = None
     policy: PolicyCfg = MISSING

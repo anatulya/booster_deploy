@@ -94,6 +94,11 @@ class BeyondMimicPolicy(Policy):
             super().release_motion()
             self.transition = None
 
+    def obs_layout(self) -> list[tuple[str, int]]:
+        n = self.robot.num_joints
+        return [("ref_joint_pos", n), ("ref_joint_vel", n), ("anchor_ori_b", 6), ("base_ang_vel", 3),
+                ("joint_pos", n), ("joint_vel", n), ("last_action", n)]
+
     def compute_observation(self) -> torch.Tensor:
         """Computes observations"""
         self._set_command()
@@ -177,7 +182,7 @@ class BeyondMimicPolicy(Policy):
                       " for safety. You can disable safety fallback by setting "
                       f"{self.cfg.__class__.__name__}.enable_safety_fallback "
                       "to False.")
-                self.controller.stop()
+                self.controller.stop(reason="safety_fallback")
 
         sim2real_map = self.robot.data.sim2real_joint_indexes
         return (

@@ -1,0 +1,819 @@
+{
+ "task": "k1_hoi_sub4_smallbox_046_stand",
+ "backend": "MujocoController",
+ "policy_class": "HoiTrackPolicy",
+ "policy_dt": 0.02,
+ "joint_names": [
+  "AAHead_yaw",
+  "Head_pitch",
+  "ALeft_Shoulder_Pitch",
+  "Left_Shoulder_Roll",
+  "Left_Elbow_Pitch",
+  "Left_Elbow_Yaw",
+  "ARight_Shoulder_Pitch",
+  "Right_Shoulder_Roll",
+  "Right_Elbow_Pitch",
+  "Right_Elbow_Yaw",
+  "Left_Hip_Pitch",
+  "Left_Hip_Roll",
+  "Left_Hip_Yaw",
+  "Left_Knee_Pitch",
+  "Left_Ankle_Pitch",
+  "Left_Ankle_Roll",
+  "Right_Hip_Pitch",
+  "Right_Hip_Roll",
+  "Right_Hip_Yaw",
+  "Right_Knee_Pitch",
+  "Right_Ankle_Pitch",
+  "Right_Ankle_Roll"
+ ],
+ "sim_joint_names": [
+  "AAHead_yaw",
+  "ALeft_Shoulder_Pitch",
+  "ARight_Shoulder_Pitch",
+  "Left_Hip_Pitch",
+  "Right_Hip_Pitch",
+  "Head_pitch",
+  "Left_Shoulder_Roll",
+  "Right_Shoulder_Roll",
+  "Left_Hip_Roll",
+  "Right_Hip_Roll",
+  "Left_Elbow_Pitch",
+  "Right_Elbow_Pitch",
+  "Left_Hip_Yaw",
+  "Right_Hip_Yaw",
+  "Left_Elbow_Yaw",
+  "Right_Elbow_Yaw",
+  "Left_Knee_Pitch",
+  "Right_Knee_Pitch",
+  "Left_Ankle_Pitch",
+  "Right_Ankle_Pitch",
+  "Left_Ankle_Roll",
+  "Right_Ankle_Roll"
+ ],
+ "files": {
+  "checkpoint_path": {
+   "path": "/home/ant/booster_deploy/./tasks/hoi_track/models/sub4_smallbox_046_stand.pt",
+   "sha256": "90ec44a16e16352d465b441ebc375c07365ca2122b64f8e4b5da9b748039c365"
+  },
+  "motion_path": {
+   "path": "/home/ant/booster_deploy/./tasks/hoi_track/motions/sub4_smallbox_046_stand_ref.npz",
+   "sha256": "b00131ae77894d37a2475acea791d3e1e35241ebe3b1584b9f212447362d2d17"
+  }
+ },
+ "git": {
+  "commit": "06cc49be0c7b1d9add7ca03e3f4685a857f1cb7d",
+  "dirty": true
+ },
+ "t_wall_created": 1790907243.0565686,
+ "cfg": {
+  "policy_dt": 0.02,
+  "task_name": "k1_hoi_sub4_smallbox_046_stand",
+  "log_dir": "logs/k1_hoi_sub4_smallbox_046_stand_20261001-191115/resim_20261001-191402/obs",
+  "robot": {
+   "name": "Booster_K1",
+   "joint_names": [
+    "AAHead_yaw",
+    "Head_pitch",
+    "ALeft_Shoulder_Pitch",
+    "Left_Shoulder_Roll",
+    "Left_Elbow_Pitch",
+    "Left_Elbow_Yaw",
+    "ARight_Shoulder_Pitch",
+    "Right_Shoulder_Roll",
+    "Right_Elbow_Pitch",
+    "Right_Elbow_Yaw",
+    "Left_Hip_Pitch",
+    "Left_Hip_Roll",
+    "Left_Hip_Yaw",
+    "Left_Knee_Pitch",
+    "Left_Ankle_Pitch",
+    "Left_Ankle_Roll",
+    "Right_Hip_Pitch",
+    "Right_Hip_Roll",
+    "Right_Hip_Yaw",
+    "Right_Knee_Pitch",
+    "Right_Ankle_Pitch",
+    "Right_Ankle_Roll"
+   ],
+   "body_names": [
+    "Trunk",
+    "Head_1",
+    "Head_2",
+    "Left_Arm_1",
+    "Left_Arm_2",
+    "Left_Arm_3",
+    "left_hand_link",
+    "Right_Arm_1",
+    "Right_Arm_2",
+    "Right_Arm_3",
+    "right_hand_link",
+    "Left_Hip_Pitch",
+    "Left_Hip_Roll",
+    "Left_Hip_Yaw",
+    "Left_Shank",
+    "Left_Ankle_Cross",
+    "left_foot_link",
+    "Right_Hip_Pitch",
+    "Right_Hip_Roll",
+    "Right_Hip_Yaw",
+    "Right_Shank",
+    "Right_Ankle_Cross",
+    "right_foot_link"
+   ],
+   "sim_joint_names": [
+    "AAHead_yaw",
+    "ALeft_Shoulder_Pitch",
+    "ARight_Shoulder_Pitch",
+    "Left_Hip_Pitch",
+    "Right_Hip_Pitch",
+    "Head_pitch",
+    "Left_Shoulder_Roll",
+    "Right_Shoulder_Roll",
+    "Left_Hip_Roll",
+    "Right_Hip_Roll",
+    "Left_Elbow_Pitch",
+    "Right_Elbow_Pitch",
+    "Left_Hip_Yaw",
+    "Right_Hip_Yaw",
+    "Left_Elbow_Yaw",
+    "Right_Elbow_Yaw",
+    "Left_Knee_Pitch",
+    "Right_Knee_Pitch",
+    "Left_Ankle_Pitch",
+    "Right_Ankle_Pitch",
+    "Left_Ankle_Roll",
+    "Right_Ankle_Roll"
+   ],
+   "sim_body_names": [
+    "Trunk",
+    "Head_1",
+    "Left_Arm_1",
+    "Right_Arm_1",
+    "Left_Hip_Pitch",
+    "Right_Hip_Pitch",
+    "Head_2",
+    "Left_Arm_2",
+    "Right_Arm_2",
+    "Left_Hip_Roll",
+    "Right_Hip_Roll",
+    "Left_Arm_3",
+    "Right_Arm_3",
+    "Left_Hip_Yaw",
+    "Right_Hip_Yaw",
+    "left_hand_link",
+    "right_hand_link",
+    "Left_Shank",
+    "Right_Shank",
+    "Left_Ankle_Cross",
+    "Right_Ankle_Cross",
+    "left_foot_link",
+    "right_foot_link"
+   ],
+   "joint_stiffness": [
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    3.9478,
+    30.201,
+    21.448,
+    17.846,
+    60.402,
+    35.692,
+    35.692,
+    30.201,
+    21.448,
+    17.846,
+    60.402,
+    35.692,
+    35.692
+   ],
+   "joint_damping": [
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    0.2513,
+    3.605,
+    2.5602,
+    2.1302,
+    4.8066,
+    4.2604,
+    4.2604,
+    3.605,
+    2.5602,
+    2.1302,
+    4.8066,
+    4.2604,
+    4.2604
+   ],
+   "default_joint_pos": [
+    0,
+    0,
+    0.0,
+    -1.3,
+    0,
+    -0.0,
+    0.0,
+    1.3,
+    0,
+    0.0,
+    -0.0,
+    0,
+    0,
+    0.0,
+    -0.0,
+    0.0,
+    -0.0,
+    0,
+    0,
+    0.0,
+    -0.0,
+    0.0
+   ],
+   "effort_limit": [
+    6.0,
+    6.0,
+    14.0,
+    14.0,
+    14.0,
+    14.0,
+    14.0,
+    14.0,
+    14.0,
+    14.0,
+    68.0,
+    76.0,
+    38.3,
+    112.0,
+    38.3,
+    38.3,
+    68.0,
+    76.0,
+    38.3,
+    112.0,
+    38.3,
+    38.3
+   ],
+   "velocity_limit": [
+    7.85,
+    7.85,
+    33.51,
+    33.51,
+    33.51,
+    33.51,
+    33.51,
+    33.51,
+    33.51,
+    33.51,
+    14.66,
+    12.57,
+    17.59,
+    12.57,
+    17.59,
+    17.59,
+    14.66,
+    12.57,
+    17.59,
+    12.57,
+    17.59,
+    17.59
+   ],
+   "knee_point_velocity": [
+    10.47,
+    10.47,
+    5.24,
+    5.24,
+    5.24,
+    5.24,
+    5.24,
+    5.24,
+    5.24,
+    5.24,
+    1.88,
+    2.62,
+    7.85,
+    2.09,
+    7.85,
+    7.85,
+    1.88,
+    2.62,
+    7.85,
+    2.09,
+    7.85,
+    7.85
+   ],
+   "mjcf_path": "{BOOSTER_ASSETS_DIR}/robots/K1/K1_22dof.xml",
+   "prepare_state": {
+    "stiffness": [
+     40.0,
+     40.0,
+     40.0,
+     50.0,
+     20.0,
+     20,
+     40.0,
+     50.0,
+     20.0,
+     20,
+     350.0,
+     350.0,
+     180.0,
+     350.0,
+     250.0,
+     250.0,
+     350.0,
+     350.0,
+     180.0,
+     350.0,
+     250.0,
+     250.0
+    ],
+    "damping": [
+     1.5,
+     1.5,
+     0.5,
+     1.5,
+     0.2,
+     0.2,
+     0.5,
+     1.5,
+     0.2,
+     0.2,
+     7.5,
+     7.5,
+     3.0,
+     5.5,
+     5.0,
+     5.0,
+     7.5,
+     7.5,
+     3.0,
+     5.5,
+     5.0,
+     5.0
+    ],
+    "joint_pos": [
+     0,
+     0,
+     0.0,
+     -1.3,
+     0,
+     -0.0,
+     0.0,
+     1.3,
+     0,
+     0.0,
+     -0.0,
+     0,
+     0,
+     0.105,
+     -0.1,
+     0.0,
+     -0.0,
+     0,
+     0,
+     0.105,
+     -0.1,
+     0.0
+    ]
+   }
+  },
+  "vel_command": null,
+  "policy": {
+   "constructor": "tasks.hoi_track.hoi_track:HoiTrackPolicy",
+   "checkpoint_path": "models/sub4_smallbox_046_stand.pt",
+   "enable_safety_fallback": true,
+   "device": "cpu",
+   "hold_start_frame": true,
+   "start_vel_tau_s": 0.5,
+   "motion_path": "motions/sub4_smallbox_046_stand_ref.npz",
+   "full_orientation_align": false,
+   "yaw_align": true,
+   "align_object_yaw": false,
+   "align_object_to_robot": true,
+   "pin_object_during_hold": true,
+   "object_body_name": "smallbox"
+  },
+  "mujoco": {
+   "scene_mjcf_path": "{BOOSTER_ASSETS_DIR}/robots/K1/K1_22dof_smallbox.xml",
+   "init_pos": [
+    0.0,
+    0.0,
+    0.551
+   ],
+   "init_quat": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "init_dof_pos": [
+    0,
+    0,
+    0.0,
+    -1.3,
+    0,
+    -0.0,
+    0.0,
+    1.3,
+    0,
+    0.0,
+    -0.0,
+    0,
+    0,
+    0.105,
+    -0.1,
+    0.0,
+    -0.0,
+    0,
+    0,
+    0.105,
+    -0.1,
+    0.0
+   ],
+   "init_dof_vel": null,
+   "decimation": 10,
+   "physics_dt": 0.002,
+   "log_states": null,
+   "visualize_reference_ghost": true,
+   "ghost_rgba": [
+    0.2,
+    0.8,
+    0.2,
+    0.25
+   ],
+   "push_body_name": null,
+   "push_force": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "push_interval_s": 3.0,
+   "push_duration_s": 0.1,
+   "push_vel_xy": null,
+   "actuator_delay_range_s": [
+    0.01,
+    0.04
+   ],
+   "torque_speed_curve": true,
+   "gantry_body_name": null,
+   "gantry_support_fraction": 0.0,
+   "gantry_attach_offset": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "record_video_path": null,
+   "record_video_seconds": 20.0,
+   "record_video_fps": null,
+   "record_video_width": 640,
+   "record_video_height": 480,
+   "hold_start_frame": true,
+   "auto_release_after_s": 3.0
+  },
+  "booster": {
+   "low_state_dt": 0.002,
+   "metrics_max_events": 2000,
+   "hold_start_frame": true
+  },
+  "evaluator": null,
+  "enable_velocity_commands": false
+ },
+ "obs_layout": [
+  [
+   "base_ang_vel",
+   3
+  ],
+  [
+   "joint_pos",
+   22
+  ],
+  [
+   "joint_vel",
+   22
+  ],
+  [
+   "last_action",
+   22
+  ],
+  [
+   "motion_phase",
+   1
+  ],
+  [
+   "k0/ref_joint_pos",
+   22
+  ],
+  [
+   "k0/ref_joint_vel",
+   22
+  ],
+  [
+   "k0/ref_anchor_ori_b",
+   6
+  ],
+  [
+   "k0/ref_object_pos_refroot",
+   3
+  ],
+  [
+   "k0/ref_object_ori_refroot",
+   6
+  ],
+  [
+   "k0/ref_object_lin_vel_refroot",
+   3
+  ],
+  [
+   "k0/ref_object_ang_vel_refroot",
+   3
+  ],
+  [
+   "k0/ref_contact_point_objlocal",
+   6
+  ],
+  [
+   "k0/ref_contact_point_refroot",
+   6
+  ],
+  [
+   "k0/ref_contact_flag",
+   2
+  ],
+  [
+   "k1/ref_joint_pos",
+   22
+  ],
+  [
+   "k1/ref_joint_vel",
+   22
+  ],
+  [
+   "k1/ref_anchor_ori_b",
+   6
+  ],
+  [
+   "k1/ref_object_pos_refroot",
+   3
+  ],
+  [
+   "k1/ref_object_ori_refroot",
+   6
+  ],
+  [
+   "k1/ref_object_lin_vel_refroot",
+   3
+  ],
+  [
+   "k1/ref_object_ang_vel_refroot",
+   3
+  ],
+  [
+   "k1/ref_contact_point_objlocal",
+   6
+  ],
+  [
+   "k1/ref_contact_point_refroot",
+   6
+  ],
+  [
+   "k1/ref_contact_flag",
+   2
+  ],
+  [
+   "k2/ref_joint_pos",
+   22
+  ],
+  [
+   "k2/ref_joint_vel",
+   22
+  ],
+  [
+   "k2/ref_anchor_ori_b",
+   6
+  ],
+  [
+   "k2/ref_object_pos_refroot",
+   3
+  ],
+  [
+   "k2/ref_object_ori_refroot",
+   6
+  ],
+  [
+   "k2/ref_object_lin_vel_refroot",
+   3
+  ],
+  [
+   "k2/ref_object_ang_vel_refroot",
+   3
+  ],
+  [
+   "k2/ref_contact_point_objlocal",
+   6
+  ],
+  [
+   "k2/ref_contact_point_refroot",
+   6
+  ],
+  [
+   "k2/ref_contact_flag",
+   2
+  ],
+  [
+   "k8/ref_joint_pos",
+   22
+  ],
+  [
+   "k8/ref_joint_vel",
+   22
+  ],
+  [
+   "k8/ref_anchor_ori_b",
+   6
+  ],
+  [
+   "k8/ref_object_pos_refroot",
+   3
+  ],
+  [
+   "k8/ref_object_ori_refroot",
+   6
+  ],
+  [
+   "k8/ref_object_lin_vel_refroot",
+   3
+  ],
+  [
+   "k8/ref_object_ang_vel_refroot",
+   3
+  ],
+  [
+   "k8/ref_contact_point_objlocal",
+   6
+  ],
+  [
+   "k8/ref_contact_point_refroot",
+   6
+  ],
+  [
+   "k8/ref_contact_flag",
+   2
+  ],
+  [
+   "k16/ref_joint_pos",
+   22
+  ],
+  [
+   "k16/ref_joint_vel",
+   22
+  ],
+  [
+   "k16/ref_anchor_ori_b",
+   6
+  ],
+  [
+   "k16/ref_object_pos_refroot",
+   3
+  ],
+  [
+   "k16/ref_object_ori_refroot",
+   6
+  ],
+  [
+   "k16/ref_object_lin_vel_refroot",
+   3
+  ],
+  [
+   "k16/ref_object_ang_vel_refroot",
+   3
+  ],
+  [
+   "k16/ref_contact_point_objlocal",
+   6
+  ],
+  [
+   "k16/ref_contact_point_refroot",
+   6
+  ],
+  [
+   "k16/ref_contact_flag",
+   2
+  ]
+ ],
+ "fields": [
+  [
+   "t_wall",
+   "f8",
+   []
+  ],
+  [
+   "t_mono",
+   "f8",
+   []
+  ],
+  [
+   "step",
+   "i8",
+   []
+  ],
+  [
+   "obs",
+   "f4",
+   [
+    465
+   ]
+  ],
+  [
+   "action",
+   "f4",
+   [
+    22
+   ]
+  ],
+  [
+   "dof_targets",
+   "f4",
+   [
+    22
+   ]
+  ],
+  [
+   "holding",
+   "?",
+   []
+  ],
+  [
+   "hold_step",
+   "i8",
+   []
+  ],
+  [
+   "motion_frame",
+   "i8",
+   []
+  ],
+  [
+   "joint_pos",
+   "f4",
+   [
+    22
+   ]
+  ],
+  [
+   "joint_vel",
+   "f4",
+   [
+    22
+   ]
+  ],
+  [
+   "feedback_torque",
+   "f4",
+   [
+    22
+   ]
+  ],
+  [
+   "root_quat_w",
+   "f4",
+   [
+    4
+   ]
+  ],
+  [
+   "root_rpy_w",
+   "f4",
+   [
+    3
+   ]
+  ],
+  [
+   "root_ang_vel_b",
+   "f4",
+   [
+    3
+   ]
+  ],
+  [
+   "vel_cmd",
+   "f4",
+   [
+    3
+   ]
+  ]
+ ],
+ "record_bytes": 2393
+}

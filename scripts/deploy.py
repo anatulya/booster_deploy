@@ -31,10 +31,46 @@ parser.add_argument("--decimation", type=int, default=None,
 parser.add_argument("--cmd", type=float, nargs=3, default=None, metavar=("VX", "VY", "VYAW"),
                     help="mujoco only: initial velocity command for velocity tasks. Needed with --record, which "
                          "has no terminal input; interactively it can still be changed by typing 'x y yaw'.")
+parser.add_argument("--log", type=str, default=None, metavar="DIR",
+                    help="Log every policy step (network input/output, named observation terms, robot state) "
+                         "under DIR/<task>_<time>/obs. On the robot this also records a ROS bag of "
+                         "ROSBAG_TOPICS into DIR/<task>_<time>/rosbag. Read logs with "
+                         "booster_deploy.utils.obs_logger.load_obs_log or scripts/replay_log.py.")
 parser.add_argument(
     "--device", type=str, default="cpu",
     help="Device to run the evaluation on (e.g., 'cpu', 'cuda')")
 args = parser.parse_args()
+
+
+# Recorded with `ros2 bag record` on robot runs with --log. /low_state is the robot's state at 500 Hz
+# (IMU, motor q/dq/tau_est); joint_ctrl is what this process commands.
+ROSBAG_TOPICS = ["/low_state", "/joint_ctrl"]
+
+
+def start_rosbag(run_dir: str):
+    """Start `ros2 bag record` as a child process; None if ros2 isn't available."""
+    import shutil
+    import subprocess
+    if shutil.which("ros2") is None:
+        print("[log] ros2 not found on PATH (source the ROS setup script first); recording observations only")
+        return None
+    out = f"{run_dir}/rosbag"
+    print(f"[log] recording ROS bag of {' '.join(ROSBAG_TOPICS)} to {out}")
+    return subprocess.Popen(["ros2", "bag", "record", "-o", out, *ROSBAG_TOPICS])
+
+
+def stop_rosbag(proc) -> None:
+    """SIGINT lets ros2 bag write its metadata; fall back to terminate if it doesn't exit."""
+    import signal
+    import subprocess
+    if proc is None or proc.poll() is not None:
+        return
+    proc.send_signal(signal.SIGINT)
+    try:
+        proc.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        proc.wait(timeout=2.0)
 
 
 def main():
@@ -67,6 +103,15 @@ def main():
 
     # Set device for policy
     task_cfg.policy.device = args.device
+    task_cfg.task_name = args.task
+
+    run_dir = None
+    if args.log:
+        import os
+        import time
+        run_dir = os.path.abspath(f"{args.log}/{args.task}_{time.strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(run_dir, exist_ok=True)
+        task_cfg.log_dir = f"{run_dir}/obs"
 
     # decide how to run based on flags
     if args.mujoco:
@@ -98,6 +143,8 @@ def main():
                 cmd = controller.vel_command
                 cmd.lin_vel_x, cmd.lin_vel_y, cmd.ang_vel_yaw = args.cmd
         controller.run()
+        if run_dir:
+            print(f"[log] run logged to {run_dir}")
     else:
         # initialize network and run robot portal
         try:
@@ -118,8 +165,14 @@ def main():
                 task_cfg.robot.joint_damping[i] = 0.5
 
         from booster_deploy.controllers.booster_robot_controller import BoosterRobotPortal
-        with BoosterRobotPortal(task_cfg, use_sim_time=args.webots) as portal:
-            portal.run()
+        rosbag = start_rosbag(run_dir) if run_dir else None
+        try:
+            with BoosterRobotPortal(task_cfg, use_sim_time=args.webots) as portal:
+                portal.run()
+        finally:
+            stop_rosbag(rosbag)
+            if run_dir:
+                print(f"[log] run logged to {run_dir}")
 
 
 if __name__ == "__main__":

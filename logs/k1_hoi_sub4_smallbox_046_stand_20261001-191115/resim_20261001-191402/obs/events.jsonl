@@ -1,0 +1,4 @@
+{"event": "start", "t_wall": 1790907243.258048, "step": 0, "holding": true}
+{"event": "motion_released", "t_wall": 1790907243.6102438, "step": 151}
+{"event": "stop", "t_wall": 1790907244.6229174, "step": 604, "reason": "resim ended"}
+{"event": "close", "t_wall": 1790907244.6229773}

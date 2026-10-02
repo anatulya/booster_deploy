@@ -41,6 +41,11 @@ class MjlabVelocityPolicy(Policy):
     def reset(self) -> None:
         self.last_action.zero_()
 
+    def obs_layout(self) -> list[tuple[str, int]]:
+        n = self.robot.num_joints
+        return [("base_ang_vel", 3), ("projected_gravity", 3), ("joint_pos", n), ("joint_vel", n),
+                ("last_action", n), ("command", 3)]
+
     def compute_observation(self) -> torch.Tensor:
         base_quat = self.robot.data.root_quat_w
         gravity_w = torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32)
@@ -51,7 +56,7 @@ class MjlabVelocityPolicy(Policy):
                   "You can disable safety fallback by setting "
                   f"{self.cfg.__class__.__name__}.enable_safety_fallback "
                   "to False.")
-            self.controller.stop()
+            self.controller.stop(reason="safety_fallback")
 
         cmd = self.controller.vel_command
         return torch.cat([

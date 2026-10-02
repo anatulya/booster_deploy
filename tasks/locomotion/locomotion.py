@@ -48,6 +48,13 @@ class LocomotionPolicy(Policy):
         """Initialize policy state."""
         pass
 
+    def obs_layout(self) -> list[tuple[str, int]]:
+        """The network sees the flattened history, oldest slot first."""
+        n = self.last_action.numel()
+        terms = [("base_ang_vel", 3), ("projected_gravity", 3), ("command", 3), ("joint_pos", n),
+                 ("joint_vel", n), ("last_action", n)]
+        return [(f"h{i}/{name}", w) for i in range(self.actor_obs_history_length) for name, w in terms]
+
     def compute_observation(self) -> torch.Tensor:
         """Compute current observation following sim2sim.py pattern."""
         # Get robot state
@@ -67,7 +74,7 @@ class LocomotionPolicy(Policy):
                       "You can disable safety fallback by setting "
                       f"{self.cfg.__class__.__name__}.enable_safety_fallback "
                       "to False.")
-                self.controller.stop()
+                self.controller.stop(reason="safety_fallback")
 
         # Get velocity commands
         lin_vel_x = self.controller.vel_command.lin_vel_x

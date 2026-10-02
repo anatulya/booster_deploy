@@ -2,6 +2,8 @@ from __future__ import annotations
 from abc import abstractmethod
 import inspect
 import os
+import time
+import numpy as np
 import torch
 
 from .controller_cfg import (
@@ -114,6 +116,11 @@ class Policy:
     def reset(self) -> None:
         """Called when the controller starts."""
 
+    def obs_layout(self) -> list[tuple[str, int]] | None:
+        """Names and widths of the observation terms, in network-input order, for the observation log.
+        None logs the raw vector only."""
+        return None
+
     def release_motion(self) -> None:
         """Stop holding the first frame and start advancing the motion."""
         if self.holding:
@@ -210,6 +217,78 @@ class BaseController:
         if self.cfg.vel_command is not None:
             self.vel_command = VelocityCommand(cfg.vel_command)
         self.policy = self.cfg.policy.constructor(self.cfg.policy, self)
+        self.obs_log = None
+        if self.cfg.log_dir:
+            self._start_obs_log()
+
+    def _start_obs_log(self) -> None:
+        from ..utils.obs_logger import ObsLogger, RecordingModel, file_sha256, git_state
+        if not hasattr(self.policy, "_model"):
+            print("[obs_logger] policy has no _model; observation logging disabled")
+            return
+        self.policy._model = RecordingModel(self.policy._model)
+        files = {}
+        for key in ("checkpoint_path", "motion_path"):
+            rel = getattr(self.cfg.policy, key, None)
+            if isinstance(rel, str):
+                path = rel if os.path.isabs(rel) else os.path.join(self.policy.task_path, rel)
+                files[key] = {"path": path, "sha256": file_sha256(path)}
+        meta = {
+            "task": self.cfg.task_name,
+            "backend": type(self).__name__,
+            "policy_class": type(self.policy).__name__,
+            "policy_dt": self.cfg.policy_dt,
+            "joint_names": list(self.cfg.robot.joint_names),
+            "sim_joint_names": list(self.cfg.robot.sim_joint_names),
+            "files": files,
+            "git": git_state(),
+            "t_wall_created": time.time(),
+            "cfg": self.cfg.to_dict(),
+        }
+        self.obs_log = ObsLogger(self.cfg.log_dir, meta)
+        self._obs_layout_pending = True
+        print(f"[obs_logger] logging policy steps to {self.cfg.log_dir}")
+
+    def _log_event(self, name: str, **info) -> None:
+        if self.obs_log is not None:
+            self.obs_log.event(name, step=self._step_count, **info)
+
+    def _log_step(self, dof_targets: torch.Tensor) -> None:
+        model = self.policy._model
+        if model.last_input is None:
+            return
+        if self._obs_layout_pending:
+            # Set on the first step, once the policy has built any lazy state the layout depends on.
+            self.obs_log._meta["obs_layout"] = self.policy.obs_layout()
+            self._obs_layout_pending = False
+        d = self.robot.data
+        quat = d.root_quat_w.detach().cpu().reshape(1, 4)
+        from ..utils.isaaclab import math as lab_math
+        rpy = torch.stack(lab_math.euler_xyz_from_quat(quat), dim=-1).reshape(3)
+        vc = self.vel_command
+        self.obs_log.record({
+            "t_wall": time.time(),
+            "t_mono": time.perf_counter(),
+            "step": self._step_count,
+            "obs": model.last_input.cpu().numpy().reshape(-1),
+            "action": model.last_output.cpu().numpy().reshape(-1),
+            "dof_targets": dof_targets.detach().cpu().numpy().reshape(-1),
+            "holding": bool(self.policy.holding),
+            "hold_step": int(getattr(self.policy, "hold_step", -1)),
+            "motion_frame": int(getattr(self.policy, "current_frame", -1)),
+            "joint_pos": d.joint_pos.detach().cpu().numpy(),
+            "joint_vel": d.joint_vel.detach().cpu().numpy(),
+            "feedback_torque": d.feedback_torque.detach().cpu().numpy(),
+            "root_quat_w": quat.numpy().reshape(4),
+            "root_rpy_w": rpy.numpy(),
+            "root_ang_vel_b": d.root_ang_vel_b.detach().cpu().numpy(),
+            "vel_cmd": np.array([vc.lin_vel_x, vc.lin_vel_y, vc.ang_vel_yaw] if vc is not None
+                                else [0.0, 0.0, 0.0], dtype=np.float32),
+        })
+
+    def close_logs(self) -> None:
+        if self.obs_log is not None:
+            self.obs_log.close()
 
     def start(self):
         """Begin a deployment session.
@@ -220,6 +299,7 @@ class BaseController:
         self._release_requested = False
         self._release_wait_reported = False
         self.policy.reset()
+        self._log_event("start", holding=bool(self.policy.holding))
 
     def request_motion_release(self) -> None:
         """Ask a policy holding its first frame to start the motion. Kept
@@ -251,11 +331,23 @@ class BaseController:
         self._step_count += 1
         self._elapsed_s = self._step_count * self.cfg.policy_dt
 
+        was_holding = self.policy.holding
         self._maybe_release_motion()
-        return self.policy.inference()
+        if was_holding and not self.policy.holding:
+            self._log_event("motion_released")
+        dof_targets = self.policy.inference()
+        if self.obs_log is not None:
+            self._log_step(dof_targets)
+        return dof_targets
 
-    def stop(self) -> None:
-        """Stop and clean up the deployment session."""
+    def stop(self, reason: str = "stop") -> None:
+        """Stop and clean up the deployment session.
+
+        Args:
+            reason: Recorded in the observation log, e.g. "safety_fallback" when a policy detects a fall.
+        """
+        if self.is_running:
+            self._log_event("safety_stop" if reason == "safety_fallback" else "stop", reason=reason)
         self.is_running = False
 
     @abstractmethod

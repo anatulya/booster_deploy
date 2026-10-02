@@ -761,10 +761,15 @@ class MujocoController(BaseController):
                     remote.close()
 
     def run(self):
-        if self.cfg.mujoco.record_video_path:
-            self._run_offscreen(self.cfg.mujoco.record_video_path)
-        else:
-            self._run_interactive()
+        try:
+            if self.cfg.mujoco.record_video_path:
+                self._run_offscreen(self.cfg.mujoco.record_video_path)
+            else:
+                self._run_interactive()
+            if self.is_running:
+                self._log_event("stop", reason="run ended")
+        finally:
+            self.close_logs()
 
 
 def _rot_y(t: float) -> np.ndarray:

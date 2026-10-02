@@ -237,6 +237,18 @@ class HoiTrackPolicy(Policy):
         rel = lab_math.quat_mul(cur_inv, ref_quat)
         return lab_math.matrix_from_quat(rel)[..., :2].reshape(n, 6)
 
+    def obs_layout(self) -> list[tuple[str, int]]:
+        n = self.robot.num_joints
+        layout = [("base_ang_vel", 3), ("joint_pos", n), ("joint_vel", n), ("last_action", n),
+                  ("motion_phase", 1)]
+        for k in self.horizon:
+            for name in self.BLOCK:
+                if name is None:
+                    layout.append((f"k{k}/ref_anchor_ori_b", 6))
+                else:
+                    layout.append((f"k{k}/{name}", int(self.ref[name].shape[-1])))
+        return layout
+
     def compute_observation(self) -> torch.Tensor:
         self._lazy_init()
         rows = self._rows()
@@ -323,7 +335,7 @@ class HoiTrackPolicy(Policy):
                       " for safety. You can disable safety fallback by setting "
                       f"{self.cfg.__class__.__name__}.enable_safety_fallback "
                       "to False.")
-                self.controller.stop()
+                self.controller.stop(reason="safety_fallback")
 
         # The residual: a zero action commands the reference pose exactly.
         target = self.cmd_dof_pos + action * self.ref["action_scale"]

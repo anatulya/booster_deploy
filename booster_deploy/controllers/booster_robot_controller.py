@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import signal
+import sys
 import time
 import threading
 import multiprocessing as mp
@@ -487,6 +488,9 @@ class BoosterRobotPortal:
         cfg: ControllerCfg,
         portal: BoosterRobotPortal,
     ) -> None:
+        # The portal terminate()s this process if it hasn't exited within 2s of shutdown. Turn SIGTERM into
+        # SystemExit so run()'s finally still writes out the observation log.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         BoosterRobotController(cfg, portal).run()
         portal.logger.info("Inference process stopped.")
 
@@ -546,29 +550,36 @@ class BoosterRobotController(BaseController):
             self.portal.motor_cmd[i].kd = kd_val
         self.portal.low_cmd_publisher.publish(self.portal.low_cmd)
 
-    def stop(self):
-        super().stop()
+    def stop(self, reason: str = "stop"):
+        super().stop(reason)
         self.portal.exit_event.set()
 
     def run(self):
-        self.update_state()
-        if self.vel_command is not None:
-            self.update_vel_command()
-        self.start()
-        next_inference_time = self.portal.timer.get_time()
-        while self.is_running and not self.portal.exit_event.is_set():
-            if self.portal.timer.get_time() < next_inference_time:
-                time.sleep(0.0002)
-                continue
-            next_inference_time += self.cfg.policy_dt
-
+        try:
             self.update_state()
             if self.vel_command is not None:
                 self.update_vel_command()
-            if self.portal.motion_release_event.is_set():
-                self.request_motion_release()
-            self.portal.metrics["policy_step"].mark()
-            dof_targets = self.policy_step()
-            self.ctrl_step(dof_targets)
+            self.start()
+            next_inference_time = self.portal.timer.get_time()
+            while self.is_running and not self.portal.exit_event.is_set():
+                if self.portal.timer.get_time() < next_inference_time:
+                    time.sleep(0.0002)
+                    continue
+                next_inference_time += self.cfg.policy_dt
 
-        self.portal.exit_event.set()
+                self.update_state()
+                if self.vel_command is not None:
+                    self.update_vel_command()
+                if self.portal.motion_release_event.is_set():
+                    self.request_motion_release()
+                self.portal.metrics["policy_step"].mark()
+                dof_targets = self.policy_step()
+                self.ctrl_step(dof_targets)
+            if self.is_running:
+                self._log_event("stop", reason="exit requested")
+        except SystemExit:
+            self._log_event("stop", reason="terminated (SIGTERM)")
+            raise
+        finally:
+            self.close_logs()
+            self.portal.exit_event.set()
