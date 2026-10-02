@@ -23,6 +23,8 @@ class JoystickConfig:
     y_axis: evdev.ecodes = evdev.ecodes.ABS_X
     yaw_axis: evdev.ecodes = evdev.ecodes.ABS_Z
 
+    # sony (see SONY_JOYSTICK_CONFIG below)
+
     # xiaoji
     # custom_mode_button: evdev.ecodes = evdev.ecodes.BTN_B
     # rl_gait_button: evdev.ecodes = evdev.ecodes.BTN_A
@@ -31,11 +33,28 @@ class JoystickConfig:
     # yaw_axis: evdev.ecodes = evdev.ecodes.ABS_RX
 
 
+# Sony DualShock 4 / DualSense ("Sony Interactive Entertainment Wireless Controller"). The Logitech layout above
+# reads yaw from ABS_Z, which on these pads is the L2 trigger: it rests at one end of its range, so an untouched
+# trigger maps to a full-rate turn command. Turning is on the right stick's ABS_RX here. Buttons are unchanged:
+# Cross reports BTN_A (custom mode) and Circle reports BTN_B (start the policy / start the motion).
+SONY_JOYSTICK_CONFIG = JoystickConfig(yaw_axis=evdev.ecodes.ABS_RX)
+
+
+def joystick_config_for(device_name: str) -> JoystickConfig:
+    """Default axis/button layout for a gamepad, picked by its evdev name."""
+    if "Sony" in device_name or "Wireless Controller" in device_name:
+        return SONY_JOYSTICK_CONFIG
+    return JoystickConfig()
+
+
 class RemoteControlService:
     """Service for handling joystick remote control input without display dependencies."""
 
     def __init__(self, config: Optional[JoystickConfig] = None):
-        """Initialize remote control service with optional configuration."""
+        """Initialize remote control service with optional configuration.
+
+        Without a config, the layout is picked per gamepad by name (see joystick_config_for)."""
+        self._auto_config = config is None
         self.config = config or JoystickConfig()
         self._lock = threading.Lock()
         self._running = True
@@ -194,6 +213,8 @@ class RemoteControlService:
 
                 # Check for both absolute axes and keys
                 if evdev.ecodes.EV_ABS in caps and evdev.ecodes.EV_KEY in caps:
+                    if self._auto_config:
+                        self.config = joystick_config_for(device.name)
                     abs_info = caps.get(evdev.ecodes.EV_ABS, [])
                     # Look for typical gamepad axes
                     axes = [code for (code, info) in abs_info]
@@ -206,7 +227,8 @@ class RemoteControlService:
                             self.config.y_axis: absinfo[self.config.y_axis],
                             self.config.yaw_axis: absinfo[self.config.yaw_axis],
                         }
-                        print(f"Found suitable joystick: {device.name}")
+                        print(f"Found suitable joystick: {device.name} (turn axis "
+                              f"{evdev.ecodes.ABS[self.config.yaw_axis]})")
                         joystick = device
                         break
 
