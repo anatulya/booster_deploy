@@ -9,6 +9,8 @@ tasks/**/motions/*
 !tasks/locomotion/robots/k1/models/k1_walk.pt
 !tasks/locomotion/robots/t1/models/t1_walk.pt
 !tasks/locomotion/robots/t2/models/t2_walk.pt
+# booster_mjlab velocity model is versioned.
+!tasks/mjlab_velocity/robots/k1/models/k1_velocity_flat.pt
 # T1 BeyondMimic release assets are versioned.
 !tasks/beyond_mimic/robots/t1/models/*
 !tasks/beyond_mimic/robots/t1/motions/*
