@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import MISSING
+import os
 import numpy as np
 import torch
 
@@ -12,6 +13,7 @@ from booster_deploy.controllers.controller_cfg import (
 from booster_deploy.robots.booster import K1_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
+from booster_deploy.utils.policy_model import load_policy_model
 from booster_deploy.utils.start_transition import StartTransition
 
 
@@ -67,13 +69,12 @@ class HoiTrackPolicy(Policy):
         self.cfg = cfg
         self.robot = controller.robot
 
-        self._model: torch.jit.ScriptModule = torch.jit.load(
-            f"{self.task_path}/{self.cfg.checkpoint_path}")
-        self._model.to(self.cfg.device).eval()
+        self._model = load_policy_model(
+            os.path.join(self.task_path, self.cfg.checkpoint_path), self.cfg.device)
         self.robot.data.to(self.cfg.device)
 
         dev = self.cfg.device
-        data = np.load(f"{self.task_path}/{self.cfg.motion_path}")
+        data = np.load(os.path.join(self.task_path, self.cfg.motion_path))
         self.ref = {
             k: torch.as_tensor(data[k], dtype=torch.float32, device=dev)
             for k in (*[b for b in self.BLOCK if b], "ref_anchor_pos_w",
@@ -268,9 +269,11 @@ class HoiTrackPolicy(Policy):
         joint_pos = (self.robot.data.joint_pos[self.real2sim]
                      - self.ref["default_joint_pos"])
         joint_vel = self.robot.data.joint_vel[self.real2sim]
-        # clip_starts is 0 for a single-clip task, so phase is just frame / length.
+        # clip_starts is 0 for a single-clip task, so phase is just frame / length. Training resamples the clip
+        # at its end, so the phase never passed (length - 1) / length there; clamp so holding the last frame
+        # past the clip's own end-stand keeps the observation in distribution instead of growing past 1.
         motion_phase = torch.tensor(
-            [self.current_frame / self.num_frames],
+            [min(self.current_frame, self.num_frames - 1) / self.num_frames],
             dtype=torch.float32, device=self.cfg.device)
 
         parts = [

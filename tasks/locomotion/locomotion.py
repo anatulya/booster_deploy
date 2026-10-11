@@ -10,6 +10,7 @@ from booster_deploy.controllers.controller_cfg import (
 from booster_deploy.robots.booster import K1_CFG, T1_23DOF_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
+from booster_deploy.utils.policy_model import load_policy_model
 
 
 class LocomotionPolicy(Policy):
@@ -26,9 +27,7 @@ class LocomotionPolicy(Policy):
             # Try relative to task directory
             policy_path = os.path.join(self.task_path, self.cfg.checkpoint_path)
 
-        self._model: torch.jit.ScriptModule = torch.jit.load(
-            policy_path, map_location="cpu")
-        self._model.eval()
+        self._model = load_policy_model(policy_path, "cpu")
 
         # Observation and action parameters
         self.actor_obs_history_length = cfg.actor_obs_history_length

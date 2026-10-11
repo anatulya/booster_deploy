@@ -562,10 +562,18 @@ class BoosterRobotController(BaseController):
             self.start()
             next_inference_time = self.portal.timer.get_time()
             while self.is_running and not self.portal.exit_event.is_set():
-                if self.portal.timer.get_time() < next_inference_time:
+                now = self.portal.timer.get_time()
+                if now < next_inference_time:
                     time.sleep(0.0002)
                     continue
+                # Schedule from now when a step runs late, rather than replaying the missed ticks back to back:
+                # each step advances the reference one frame, so catching up played the motion at 2-3.6x speed
+                # after every stall (on hardware, a ~340 ms stall at the bottom of the boxlarge bend became a
+                # 2.5x stand-up and a fall). Missed ticks are dropped; the reference simply pauses during a stall.
+                # Lateness under one tick keeps the fixed grid, so ordinary jitter does not drift the rate.
                 next_inference_time += self.cfg.policy_dt
+                if next_inference_time <= now:
+                    next_inference_time = now + self.cfg.policy_dt
 
                 self.update_state()
                 if self.vel_command is not None:

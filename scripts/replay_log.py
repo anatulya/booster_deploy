@@ -1,6 +1,6 @@
 """Replay a run logged with `deploy.py --log` (sim or real robot).
 
-    python scripts/replay_log.py <run dir or its obs/ dir> --mode open-loop [--checkpoint other.pt]
+    python scripts/replay_log.py <run dir or its obs/ dir> --mode open-loop [--checkpoint path/to.pt]
     python scripts/replay_log.py <run> --mode view   [--video out.mp4] [--speed 0.5] [--no-ghost]
     python scripts/replay_log.py <run> --mode resim  [--video out.mp4] [--seed 0] [--steps N]
 
@@ -32,7 +32,10 @@ import torch
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("run", help="Run directory from deploy.py --log (or its obs/ subdirectory).")
 parser.add_argument("--mode", choices=["open-loop", "view", "resim"], required=True)
-parser.add_argument("--checkpoint", default=None, help="open-loop: run this checkpoint instead of the logged one.")
+parser.add_argument("--checkpoint", default=None,
+                    help="Use this checkpoint instead of the task's own (all modes), e.g. the robot's copy saved under "
+                         "another name. It is checked against the logged sha256; a different file needs "
+                         "--allow-mismatch, and then replays that policy rather than the one that ran.")
 parser.add_argument("--allow-mismatch", action="store_true",
                     help="Proceed even if the checkpoint/motion files differ from the logged sha256.")
 parser.add_argument("--video", default=None, help="view/resim: render to this mp4 instead of opening a viewer.")
@@ -40,6 +43,8 @@ parser.add_argument("--speed", type=float, default=1.0, help="view/resim viewer:
 parser.add_argument("--no-ghost", action="store_true", help="view/resim: hide the reference ghost.")
 parser.add_argument("--steps", type=int, default=None, help="resim: number of steps (default: the log's length).")
 parser.add_argument("--seed", type=int, default=0, help="resim: seed for the sim's random draws (actuator delay).")
+parser.add_argument("--no-object", action="store_true",
+                    help="resim: keep the task's object parked out of the way, for runs done on hardware without it.")
 args = parser.parse_args()
 
 # Keys in a logged config that describe the original run rather than the policy, so are not re-applied.
@@ -79,6 +84,8 @@ def rebuild_cfg(meta: dict):
     cfg = get_task(meta["task"])
     apply_logged_cfg(cfg, meta["cfg"])
     cfg.task_name = meta["task"]
+    if args.checkpoint:
+        cfg.policy.checkpoint_path = os.path.abspath(args.checkpoint)
     cfg.log_dir = None
     cfg.mujoco.record_video_path = None
     # A robot log's hold setting lives under `booster`; the MuJoCo controller reads it from `mujoco`.
@@ -101,6 +108,8 @@ def local_file(cfg, key: str) -> str | None:
 
 def check_files(meta: dict, cfg) -> None:
     from booster_deploy.utils.obs_logger import file_sha256
+    if args.mode == "view":
+        return   # kinematic playback never runs the policy, so its files don't matter
     bad = []
     for key, logged in meta.get("files", {}).items():
         path = local_file(cfg, key) or logged["path"]
@@ -213,8 +222,9 @@ class FrameSink:
 # ---------------------------------------------------------------- modes
 
 def open_loop(log, meta, cfg) -> None:
-    path = args.checkpoint or local_file(cfg, "checkpoint_path") or meta["files"]["checkpoint_path"]["path"]
-    model = torch.jit.load(path, map_location="cpu").eval()
+    path = local_file(cfg, "checkpoint_path") or meta["files"]["checkpoint_path"]["path"]
+    from booster_deploy.utils.policy_model import load_policy_model
+    model = load_policy_model(path)
     obs = torch.from_numpy(log["obs"].astype(np.float32))
     with torch.no_grad():
         out = np.stack([model(o[None]).reshape(-1).numpy() for o in obs])
@@ -252,10 +262,13 @@ def resim(log, meta, cfg, run_dir: str) -> None:
     from booster_deploy.utils.obs_logger import load_obs_log
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    out_dir = os.path.join(run_dir, f"resim_{time.strftime('%Y%m%d-%H%M%S')}")
+    out_dir = os.path.join(run_dir, f"resim{'_noobj' if args.no_object else ''}_{time.strftime('%Y%m%d-%H%M%S')}")
     cfg.log_dir = os.path.join(out_dir, "obs")
     cfg.mujoco.visualize_reference_ghost = not args.no_ghost
     c = make_controller(cfg)
+    if args.no_object and hasattr(c.policy, "_place_object"):
+        # The controller parked the object at construction; never place it.
+        c.policy._place_object = lambda: None
 
     # Start from the first logged step's state. Root linear/angular velocity aren't known from a robot log.
     FootGrounding(c).set_root(c.mj_data, log["root_quat_w"][0], log["joint_pos"][0])

@@ -14,6 +14,7 @@ from booster_deploy.robots.booster import K1_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
 from booster_deploy.utils.motion_loader import MotionLoader
+from booster_deploy.utils.policy_model import load_policy_model
 from booster_deploy.utils.start_transition import StartTransition
 
 
@@ -23,9 +24,8 @@ class BeyondMimicPolicy(Policy):
     def __init__(self, cfg: BeyondMimicPolicyCfg, controller: BaseController):
         super().__init__(cfg, controller)
         self.cfg = cfg
-        self._model: torch.jit.ScriptModule = torch.jit.load(
-            f"{self.task_path}/{self.cfg.checkpoint_path}")
-        self._model.to(self.cfg.device).eval()
+        self._model = load_policy_model(
+            os.path.join(self.task_path, self.cfg.checkpoint_path), self.cfg.device)
 
         self.robot = controller.robot
 
@@ -36,7 +36,7 @@ class BeyondMimicPolicy(Policy):
         self.robot.data.to(self.cfg.device)
 
         self.motion = MotionLoader(
-            motion_file=f"{self.task_path}/{self.cfg.motion_path}",
+            motion_file=os.path.join(self.task_path, self.cfg.motion_path),
             track_body_names=[self.cfg.anchor_body_name],
             track_joint_names=self.robot.cfg.sim_joint_names,
             default_motion_body_names=self.robot.cfg.sim_body_names,

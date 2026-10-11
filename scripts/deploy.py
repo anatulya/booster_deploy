@@ -43,8 +43,14 @@ args = parser.parse_args()
 
 
 # Recorded with `ros2 bag record` on robot runs with --log. /low_state is the robot's state at 500 Hz
-# (IMU, motor q/dq/tau_est); joint_ctrl is what this process commands.
-ROSBAG_TOPICS = ["/low_state", "/joint_ctrl"]
+# (IMU, motor q/dq/tau_est), published by the firmware.
+#
+# Do not add /joint_ctrl. It is published from the forked inference process through a writer created before
+# the fork, and the bag subscribes to it as a reliable reader whose acknowledgements the forked copy can't
+# receive: every publish then stalls on the DDS blocking timeout (100 ms), and after ~2000 steps the
+# inference loop hung outright, mid-run. The commanded targets are in the observation log anyway
+# (obs/ `dof_targets`, with the gains in meta.json's cfg).
+ROSBAG_TOPICS = ["/low_state"]
 
 
 def start_rosbag(run_dir: str):

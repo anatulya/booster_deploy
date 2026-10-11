@@ -10,6 +10,7 @@ from booster_deploy.controllers.controller_cfg import (
 from booster_deploy.robots.booster import K1_CFG
 from booster_deploy.utils.isaaclab.configclass import configclass
 from booster_deploy.utils.isaaclab import math as lab_math
+from booster_deploy.utils.policy_model import load_policy_model
 
 
 class MjlabVelocityPolicy(Policy):
@@ -31,9 +32,7 @@ class MjlabVelocityPolicy(Policy):
         policy_path = self.cfg.checkpoint_path
         if not os.path.isabs(policy_path):
             policy_path = os.path.join(self.task_path, self.cfg.checkpoint_path)
-        self._model: torch.jit.ScriptModule = torch.jit.load(
-            policy_path, map_location="cpu")
-        self._model.eval()
+        self._model = load_policy_model(policy_path, "cpu")
 
         self.action_scale = torch.tensor(cfg.action_scale, dtype=torch.float32)
         self.last_action = torch.zeros(len(cfg.action_scale), dtype=torch.float32)

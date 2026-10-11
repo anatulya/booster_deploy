@@ -15,3 +15,6 @@ __pycache__/
 *.pyd
 
 *.mp4
+# Run logs and robot data (kept on disk, not in git)
+logs/
+deployment_logs/
