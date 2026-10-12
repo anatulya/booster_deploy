@@ -36,6 +36,36 @@ class MjlabVelocityPolicy(Policy):
 
         self.action_scale = torch.tensor(cfg.action_scale, dtype=torch.float32)
         self.last_action = torch.zeros(len(cfg.action_scale), dtype=torch.float32)
+        self._check_onnx_metadata(policy_path)
+
+    def _check_onnx_metadata(self, policy_path: str) -> None:
+        """booster_mjlab stores the training gains, home pose and action scale in each ONNX export. Refuse a
+        checkpoint whose values differ from this task's config: it would run with PD gains or a baseline pose it
+        was not trained for."""
+        session = getattr(self._model, "session", None)
+        if session is None:
+            return   # TorchScript: no metadata to compare
+        meta = session.get_modelmeta().custom_metadata_map
+        expected = {
+            "joint_stiffness": self.robot.joint_stiffness,
+            "joint_damping": self.robot.joint_damping,
+            "default_joint_pos": self.robot.default_joint_pos,
+            "action_scale": self.action_scale,
+        }
+        bad = []
+        for key, ours in expected.items():
+            if key not in meta:
+                continue
+            theirs = torch.tensor([float(v) for v in meta[key].split(",")], dtype=torch.float32)
+            ours = torch.as_tensor(ours, dtype=torch.float32).flatten().cpu()
+            # The metadata is written with 3 decimals.
+            if theirs.shape != ours.shape or not torch.allclose(theirs, ours, atol=2e-3):
+                bad.append(f"  {key}:\n    checkpoint {theirs.tolist()}\n    task       {ours.tolist()}")
+        if bad:
+            raise ValueError(
+                f"{policy_path} was trained with different settings than this task's config:\n"
+                + "\n".join(bad)
+                + "\nUpdate the task config to match the checkpoint, or use a matching checkpoint.")
 
     def reset(self) -> None:
         self.last_action.zero_()

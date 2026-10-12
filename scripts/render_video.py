@@ -26,6 +26,10 @@ parser.add_argument("--task", required=True, help="Registered task name (see dep
 parser.add_argument("--out", default="out.mp4", help="Output mp4 path.")
 parser.add_argument("--segment", type=float, nargs=4, action="append", metavar=("SECONDS", "VX", "VY", "VYAW"),
                     help="Hold this velocity command for SECONDS; repeat for a schedule.")
+parser.add_argument(
+    "--checkpoint", type=str, default=None,
+    help="Run this checkpoint (.pt or .onnx) instead of the task's own, e.g. another iteration "
+         "or run of the same task.")
 parser.add_argument("--width", type=int, default=960)
 parser.add_argument("--height", type=int, default=540)
 parser.add_argument("--distance", type=float, default=2.5, help="Camera distance from the robot (m).")
@@ -42,6 +46,9 @@ def main():
     from booster_deploy.controllers.mujoco_controller import MujocoController
 
     cfg = get_task(args.task)
+    if args.checkpoint:
+        cfg.policy.checkpoint_path = os.path.abspath(args.checkpoint)
+        print(f"Using checkpoint {os.path.abspath(args.checkpoint)}")
     controller = MujocoController(cfg)
     controller.update_vel_command = lambda: None   # commands come from the schedule, not stdin
     model, data = controller.mj_model, controller.mj_data

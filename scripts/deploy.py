@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 sys.path.append(".")
@@ -15,6 +16,10 @@ parser.add_argument("--mujoco", action="store_true", default=False,
 parser.add_argument(
     "--device", type=str, default="cpu",
     help="Device to run the evaluation on (e.g., 'cpu', 'cuda')")
+parser.add_argument(
+    "--checkpoint", type=str, default=None,
+    help="Run this checkpoint (.pt or .onnx) instead of the task's own, e.g. another iteration "
+         "or run of the same task.")
 parser.add_argument(
     "--exit-mode",
     choices=("walking", "damping"),
@@ -54,6 +59,9 @@ def main():
 
     # Set device for policy
     task_cfg.policy.device = args.device
+    if args.checkpoint:
+        task_cfg.policy.checkpoint_path = os.path.abspath(args.checkpoint)
+        print(f"Using checkpoint {os.path.abspath(args.checkpoint)}")
     if args.exit_mode is not None:
         task_cfg.booster.exit_mode = args.exit_mode
 
