@@ -37,6 +37,19 @@ If it falls or walks badly in simulation, don't run it on the robot.
 
 ## 3. Run on the robot
 
+### Connect the controller
+
+1. Turn on the robot.
+2. Hold the controller's home button for a second or two.
+3. Wait until the three white bars at the bottom of the controller (between the right thumbstick and the D-pad) are filled.
+
+The robot's own modes are on the controller too:
+
+- **Left trigger + minus**: damp mode
+- **Left trigger + plus**: stand
+
+### Start your policy
+
 ```bash
 source .venv/bin/activate
 python scripts/deploy.py --task k1_mjlab_velocity_flat --checkpoint checkpoints/<yourname>.onnx
@@ -45,7 +58,7 @@ python scripts/deploy.py --task k1_mjlab_velocity_flat --checkpoint checkpoints/
 1. Check that it prints `Using checkpoint .../<yourname>.onnx`.
 2. Press **X**: the robot moves to the starting pose (knees bent, arms down).
 3. Press **A**: your policy starts. The left stick walks forward/back and sideways; the right stick turns.
-4. **Ctrl-C** ends the run, and the robot switches back to its own walking mode.
+4. **Ctrl-C** ends the run, and the robot goes back to custom mode.
 
 Start with the robot on the gantry, and use small stick inputs first.
 
