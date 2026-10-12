@@ -70,8 +70,9 @@ class K1MjlabVelocityFlatTaskCfg(K1MjlabVelocityControllerCfg):
     '''Mjlab-Velocity-Flat-Booster-K1 policy (run 2026-10-11_14-09-28, iteration 14300).'''
     def __post_init__(self):
         super().__post_init__()
-        # booster_mjlab's ONNX export, copied from logs/rsl_rl/k1_velocity/<run>/<run>.onnx.
-        self.policy.checkpoint_path = "robots/k1/models/k1_velocity_flat.onnx"
+        # booster_mjlab's ONNX export (logs/rsl_rl/k1_velocity/<run>/<run>.onnx), kept in the repo's
+        # checkpoints/ folder with the others; deploy.py --checkpoint picks a different one.
+        self.policy.checkpoint_path = "../../checkpoints/baseline.onnx"
 
 
 register_task("k1_mjlab_velocity_flat", K1MjlabVelocityFlatTaskCfg())
