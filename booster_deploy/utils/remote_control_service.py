@@ -263,6 +263,15 @@ class RemoteControlService:
                             self.config.yaw_axis: absinfo[self.config.yaw_axis],
                         }
                         print(f"Found suitable joystick: {device.name}")
+                        # Pads on the generic HID gamepad driver (e.g. Xbox-style pads that report as a Sony
+                        # "Wireless Controller") number their face buttons left, bottom, right, top as
+                        # BTN_A, BTN_B, BTN_C, BTN_X. Only that driver reports BTN_C, so use it to map the
+                        # physical X (left) to custom mode and A (bottom) to RL mode. The axes already
+                        # match: ABS_Z is the right stick's horizontal axis there.
+                        if evdev.ecodes.BTN_C in caps.get(evdev.ecodes.EV_KEY, []):
+                            self.config.custom_mode_button = evdev.ecodes.BTN_A
+                            self.config.rl_gait_button = evdev.ecodes.BTN_B
+                            print("Generic HID button layout: X (left) = custom mode, A (bottom) = RL mode")
                         joystick = device
                         break
 
